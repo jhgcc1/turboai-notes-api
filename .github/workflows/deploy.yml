@@ -1,0 +1,93 @@
+name: Deploy
+
+on:
+  push:
+    branches: [develop]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: staging or prod
+        required: true
+        default: staging
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
+    env:
+      TF_ENV: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Terraform init/plan/apply
+        working-directory: terraform/envs/${{ env.TF_ENV }}
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_django_secret_key: ${{ secrets.DJANGO_SECRET_KEY }}
+          TF_VAR_image_tag: ${{ github.sha }}
+        run: |
+          terraform init
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+          terraform output -json > "$GITHUB_WORKSPACE/tf-outputs.json"
+
+      - name: Login ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          REPO=$(jq -r '.ecr_repository_url.value' tf-outputs.json)
+          docker build -t "$REPO:${{ github.sha }}" -t "$REPO:latest" .
+          docker push "$REPO:${{ github.sha }}"
+          docker push "$REPO:latest"
+
+      - name: Force App Runner deployment
+        run: |
+          SERVICE=$(aws apprunner list-services --query "ServiceSummaryList[?contains(ServiceName, 'turboai-notes-${{ env.TF_ENV }}')].ServiceArn | [0]" --output text)
+          aws apprunner start-deployment --service-arn "$SERVICE"
+
+      - name: Smoke health
+        run: |
+          API=$(jq -r '.api_url.value' tf-outputs.json)
+          WEB=$(jq -r '.web_url.value' tf-outputs.json)
+          echo "API_URL=$API" >> "$GITHUB_ENV"
+          echo "WEB_URL=$WEB" >> "$GITHUB_ENV"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS "$API/api/health/" | grep -q ok; then exit 0; fi
+            sleep 15
+          done
+          exit 1
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed ${{ env.TF_ENV }}"
+            echo "- API: ${{ env.API_URL }}"
+            echo "- Web: ${{ env.WEB_URL }}"
+            echo "- Commit: ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"
