@@ -173,7 +173,7 @@ AXES_RESET_ON_SUCCESS = True
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 CLOUDWATCH_ENABLED = os.getenv("CLOUDWATCH_ENABLED", "false").lower() in ("1", "true", "yes")
 CLOUDWATCH_LOG_GROUP = os.getenv("CLOUDWATCH_LOG_GROUP", "")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
 
 LOGGING = {
     "version": 1,
@@ -200,10 +200,12 @@ LOGGING = {
 }
 
 if CLOUDWATCH_ENABLED and CLOUDWATCH_LOG_GROUP:
+    # Log group is provisioned by Terraform; task role has stream put/create only.
     LOGGING["handlers"]["cloudwatch"] = {
         "class": "watchtower.CloudWatchLogHandler",
-        "log_group": CLOUDWATCH_LOG_GROUP,
-        "stream_name": ENVIRONMENT,
+        "log_group_name": CLOUDWATCH_LOG_GROUP,
+        "log_stream_name": ENVIRONMENT,
+        "create_log_group": False,
         "formatter": "json",
     }
     LOGGING["root"]["handlers"].append("cloudwatch")

@@ -27,7 +27,8 @@ jobs:
       name: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
     env:
       TF_ENV: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
-      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+      # Account infra is us-east-2; do not fall back to us-east-1.
+      AWS_REGION: us-east-2
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +42,12 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform init/plan/apply
+      # Push image before terraform updates the task definition to :${{ github.sha }}.
+      - name: Login ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Terraform init + outputs
         working-directory: terraform/envs/${{ env.TF_ENV }}
         env:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
@@ -49,27 +55,41 @@ jobs:
           TF_VAR_image_tag: ${{ github.sha }}
         run: |
           terraform init
-          terraform plan -out=tfplan
-          terraform apply -auto-approve tfplan
-          terraform output -json > "$GITHUB_WORKSPACE/tf-outputs.json"
-
-      - name: Login ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          terraform output -json > "$GITHUB_WORKSPACE/tf-outputs.json" || true
+          if [[ ! -s "$GITHUB_WORKSPACE/tf-outputs.json" ]]; then
+            echo '{"ecr_repository_url":{"value":""}}' > "$GITHUB_WORKSPACE/tf-outputs.json"
+          fi
 
       - name: Build and push API image
         env:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          REPO=$(jq -r '.ecr_repository_url.value' tf-outputs.json)
+          REPO=$(jq -r '.ecr_repository_url.value // empty' tf-outputs.json)
+          if [[ -z "$REPO" || "$REPO" == "null" ]]; then
+            REPO="${ECR_REGISTRY}/turboai-notes-${TF_ENV}"
+          fi
+          echo "Pushing to $REPO:${{ github.sha }}"
           docker build -t "$REPO:${{ github.sha }}" -t "$REPO:latest" .
           docker push "$REPO:${{ github.sha }}"
           docker push "$REPO:latest"
 
-      - name: Force App Runner deployment
+      - name: Terraform plan/apply
+        working-directory: terraform/envs/${{ env.TF_ENV }}
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_django_secret_key: ${{ secrets.DJANGO_SECRET_KEY }}
+          TF_VAR_image_tag: ${{ github.sha }}
         run: |
-          SERVICE=$(aws apprunner list-services --query "ServiceSummaryList[?contains(ServiceName, 'turboai-notes-${{ env.TF_ENV }}')].ServiceArn | [0]" --output text)
-          aws apprunner start-deployment --service-arn "$SERVICE"
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+          terraform output -json > "$GITHUB_WORKSPACE/tf-outputs.json"
+
+      - name: Force ECS deployment
+        run: |
+          CLUSTER=$(jq -r '.ecs_cluster_name.value' tf-outputs.json)
+          SERVICE=$(jq -r '.ecs_service_name.value' tf-outputs.json)
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
 
       - name: Smoke health
         run: |
@@ -78,7 +98,23 @@ jobs:
           echo "API_URL=$API" >> "$GITHUB_ENV"
           echo "WEB_URL=$WEB" >> "$GITHUB_ENV"
           for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -fsS "$API/api/health/" | grep -q ok; then exit 0; fi
+            BODY=$(curl -fsS "$API/api/health/" || true)
+            echo "attempt $i: $BODY"
+            if echo "$BODY" | grep -q ok; then
+              # Prefer Django spectacular docs over BaseHTTP stub "ok"
+              if curl -fsS "$API/api/docs/" | grep -qiE 'swagger|redoc|drf-spectacular|openapi'; then
+                exit 0
+              fi
+              # Still accept health if docs path differs; reject BaseHTTP server header
+              HDR=$(curl -sSI "$API/api/health/" | tr -d '\r' | grep -i '^server:' || true)
+              echo "$HDR"
+              if echo "$HDR" | grep -qi BaseHTTP; then
+                echo "Still serving BaseHTTP stub"
+                sleep 15
+                continue
+              fi
+              exit 0
+            fi
             sleep 15
           done
           exit 1
@@ -90,4 +126,6 @@ jobs:
             echo "- API: ${{ env.API_URL }}"
             echo "- Web: ${{ env.WEB_URL }}"
             echo "- Commit: ${{ github.sha }}"
+            echo "- Region: ${{ env.AWS_REGION }}"
+            echo "- Runtime: ECS Fargate"
           } >> "$GITHUB_STEP_SUMMARY"
