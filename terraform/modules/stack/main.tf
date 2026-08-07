@@ -228,7 +228,7 @@ resource "aws_key_pair" "bastion" {
 }
 
 resource "aws_instance" "bastion" {
-  ami                         = data.aws_ssm_parameter.al2023.value
+  ami = data.aws_ssm_parameter.al2023.value
   # Free-tier eligible on this account (t4g.nano is not).
   instance_type               = "t4g.micro"
   subnet_id                   = aws_subnet.public[0].id
@@ -287,6 +287,28 @@ data "aws_ssm_parameter" "al2023" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 }
 
+resource "aws_secretsmanager_secret" "django_secret_key" {
+  name                    = "${local.name}-django-secret-key"
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "django_secret_key" {
+  secret_id     = aws_secretsmanager_secret.django_secret_key.id
+  secret_string = var.django_secret_key
+}
+
+resource "aws_secretsmanager_secret" "db_password" {
+  name                    = "${local.name}-db-password"
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = var.db_password
+}
+
 resource "aws_ecr_repository" "api" {
   name                 = local.name
   image_tag_mutability = "MUTABLE"
@@ -318,6 +340,24 @@ resource "aws_iam_role" "ecs_execution" {
 resource "aws_iam_role_policy_attachment" "ecs_execution" {
   role       = aws_iam_role.ecs_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# AmazonECSTaskExecutionRolePolicy does not grant Secrets Manager read; task
+# startup needs this to resolve `secrets:` (valueFrom) entries below.
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  name = "${local.name}-ecs-exec-secrets"
+  role = aws_iam_role.ecs_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_secretsmanager_secret.django_secret_key.arn,
+        aws_secretsmanager_secret.db_password.arn,
+      ]
+    }]
+  })
 }
 
 resource "aws_iam_role" "ecs_task" {
@@ -406,10 +446,8 @@ resource "aws_ecs_task_definition" "api" {
     environment = [
       { name = "ENVIRONMENT", value = var.environment == "prod" ? "production" : "staging" },
       { name = "DEBUG", value = "false" },
-      { name = "SECRET_KEY", value = var.django_secret_key },
       { name = "POSTGRES_DB", value = "turbo_notes" },
       { name = "POSTGRES_USER", value = var.db_username },
-      { name = "POSTGRES_PASSWORD", value = var.db_password },
       { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
       { name = "POSTGRES_PORT", value = "5432" },
       { name = "ALLOWED_HOSTS", value = "*" },
@@ -421,6 +459,12 @@ resource "aws_ecs_task_definition" "api" {
       { name = "CORS_ALLOWED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
       { name = "CSRF_TRUSTED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
       { name = "FRONTEND_URL", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
+    ]
+    # SECRET_KEY / POSTGRES_PASSWORD resolved from Secrets Manager at task
+    # startup, never rendered into the task definition in plaintext.
+    secrets = [
+      { name = "SECRET_KEY", valueFrom = aws_secretsmanager_secret.django_secret_key.arn },
+      { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.db_password.arn },
     ]
     logConfiguration = {
       logDriver = "awslogs"

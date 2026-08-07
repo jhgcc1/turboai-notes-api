@@ -200,6 +200,38 @@ def test_cookie_jwt_auth_and_bearer(api: APIClient, user: User) -> None:
 
 
 @pytest.mark.django_db
+def test_cookie_auth_enforces_csrf(user: User) -> None:
+    """Cookie-authenticated mutations must carry a valid CSRF token.
+
+    Regression test for the security audit finding that ``APIView``'s
+    implicit ``csrf_exempt`` left every cookie-authenticated write endpoint
+    forgeable cross-site (see apps.accounts.authentication.CookieJWTAuthentication).
+    """
+    strict = APIClient(enforce_csrf_checks=True)
+    refresh = RefreshToken.for_user(user)
+    strict.cookies["access_token"] = str(refresh.access_token)
+
+    denied = strict.post(reverse("auth-logout"), format="json")
+    assert denied.status_code == status.HTTP_403_FORBIDDEN
+
+    csrf_res = strict.get(reverse("auth-csrf"))
+    token = csrf_res.cookies["csrftoken"].value
+    ok = strict.post(reverse("auth-logout"), format="json", HTTP_X_CSRFTOKEN=token)
+    assert ok.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_bearer_auth_exempt_from_csrf(user: User) -> None:
+    """Authorization-header (bearer) auth is not cookie-based, so a mutating
+    request needs no CSRF token — unlike the cookie-auth path above."""
+    strict = APIClient(enforce_csrf_checks=True)
+    refresh = RefreshToken.for_user(user)
+    strict.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+    res = strict.post(reverse("auth-logout"), format="json")
+    assert res.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
 def test_set_clear_cookies_with_domain(settings, api: APIClient) -> None:
     from django.http import HttpResponse
 

@@ -33,7 +33,12 @@ if [[ -z "$OIDC_ARN" || "$OIDC_ARN" == "None" ]]; then
 fi
 echo "OIDC_ARN=$OIDC_ARN"
 
-# Trust policy: only jhgcc1 turboai-notes-* repos
+# Trust policy: only jhgcc1 turboai-notes-* repos.
+# GitHub's OIDC `sub` claim can be either the classic
+# "repo:OWNER/REPO:..." form or the immutable-ID form
+# "repo:OWNER@OWNER_ID/REPO@REPO_ID:..." (seen on this account for
+# environment-scoped jobs) — match both so AssumeRoleWithWebIdentity
+# doesn't fail with "Not authorized" depending on which one GitHub sends.
 TRUST=$(cat <<EOF
 {
   "Version": "2012-10-17",
@@ -48,7 +53,9 @@ TRUST=$(cat <<EOF
       "StringLike": {
         "token.actions.githubusercontent.com:sub": [
           "repo:jhgcc1/turboai-notes-api:*",
-          "repo:jhgcc1/turboai-notes-web:*"
+          "repo:jhgcc1/turboai-notes-web:*",
+          "repo:jhgcc1@*/turboai-notes-api@*:*",
+          "repo:jhgcc1@*/turboai-notes-web@*:*"
         ]
       }
     }
@@ -66,12 +73,15 @@ else
     --description "GitHub Actions deploy for Turbo Notes"
 fi
 
-# Broad deploy policy (demo account) — tighten later
+# Broad deploy policy (demo account) — tighten later.
+# secretsmanager is scoped to this project's secret name prefix only (least
+# privilege for the Secrets Manager migration in modules/stack/main.tf).
 POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    {"Effect":"Allow","Action":["ecr:*","ecs:*","apprunner:*","rds:*","ec2:*","s3:*","cloudfront:*","logs:*","cloudwatch:*","iam:PassRole","iam:GetRole","iam:CreateRole","iam:AttachRolePolicy","iam:PutRolePolicy","iam:TagRole","iam:CreateInstanceProfile","iam:AddRoleToInstanceProfile","iam:GetInstanceProfile","ssm:GetParameter","dynamodb:*","elasticloadbalancing:*"],"Resource":"*"}
+    {"Effect":"Allow","Action":["ecr:*","ecs:*","apprunner:*","rds:*","ec2:*","s3:*","cloudfront:*","logs:*","cloudwatch:*","iam:PassRole","iam:GetRole","iam:CreateRole","iam:AttachRolePolicy","iam:PutRolePolicy","iam:TagRole","iam:CreateInstanceProfile","iam:AddRoleToInstanceProfile","iam:GetInstanceProfile","ssm:GetParameter","dynamodb:*","elasticloadbalancing:*"],"Resource":"*"},
+    {"Effect":"Allow","Action":["secretsmanager:CreateSecret","secretsmanager:DescribeSecret","secretsmanager:GetSecretValue","secretsmanager:PutSecretValue","secretsmanager:UpdateSecret","secretsmanager:DeleteSecret","secretsmanager:TagResource"],"Resource":"arn:aws:secretsmanager:*:${ACCOUNT_ID}:secret:turboai-notes-*"}
   ]
 }
 EOF
