@@ -13,6 +13,7 @@ dist/
 build/
 *.sqlite3
 .DS_Store
+staticfiles/
 terraform/.terraform/
 terraform/**/.terraform/
 terraform/**/.terraform.lock.hcl

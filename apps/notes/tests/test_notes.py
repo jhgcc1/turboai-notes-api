@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth.models import User
 from django.urls import reverse
+from pytest_django.fixtures import Settings as DjangoTestSettings
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -19,7 +20,7 @@ def api() -> APIClient:
 
 
 @pytest.fixture
-def user(db) -> User:
+def user(db: None) -> User:
     return User.objects.create_user(
         username="owner@example.com",
         email="owner@example.com",
@@ -28,7 +29,7 @@ def user(db) -> User:
 
 
 @pytest.fixture
-def other(db) -> User:
+def other(db: None) -> User:
     return User.objects.create_user(
         username="other@example.com",
         email="other@example.com",
@@ -92,8 +93,7 @@ def test_cannot_use_others_category(auth_api: APIClient, other: User) -> None:
 
 @pytest.mark.django_db
 def test_cannot_access_others_note(auth_api: APIClient, user: User, other: User) -> None:
-    cat = ensure_default_categories(other)[0]
-    # ensure_default returns only newly created; fetch one
+    ensure_default_categories(other)
     cat = Category.objects.filter(user=other).first()
     assert cat is not None
     note = Note.objects.create(user=other, category=cat, title="Private", body="nope")
@@ -102,7 +102,7 @@ def test_cannot_access_others_note(auth_api: APIClient, user: User, other: User)
 
 
 @pytest.mark.django_db
-def test_seed_allowed_and_blocked(auth_api: APIClient, settings) -> None:
+def test_seed_allowed_and_blocked(auth_api: APIClient, settings: DjangoTestSettings) -> None:
     settings.ENVIRONMENT = "staging"
     first = auth_api.post(reverse("seed-staging"), format="json")
     assert first.status_code in (status.HTTP_200_OK, status.HTTP_201_CREATED)

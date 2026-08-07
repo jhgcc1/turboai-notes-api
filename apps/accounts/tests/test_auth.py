@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth.models import User
 from django.urls import reverse
+from pytest_django.fixtures import Settings as DjangoTestSettings
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,7 +17,7 @@ def api() -> APIClient:
 
 
 @pytest.fixture
-def user(db) -> User:
+def user(db: None) -> User:
     return User.objects.create_user(
         username="friend@example.com",
         email="friend@example.com",
@@ -232,7 +233,7 @@ def test_bearer_auth_exempt_from_csrf(user: User) -> None:
 
 
 @pytest.mark.django_db
-def test_set_clear_cookies_with_domain(settings, api: APIClient) -> None:
+def test_set_clear_cookies_with_domain(settings: DjangoTestSettings, api: APIClient) -> None:
     from django.http import HttpResponse
 
     from apps.accounts.cookies import clear_auth_cookies, set_auth_cookies

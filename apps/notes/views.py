@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from django.db.models import Count
+from typing import cast
+
+from django.contrib.auth.models import User
+from django.db.models import Count, QuerySet
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -15,35 +18,47 @@ from apps.notes.serializers import CategorySerializer, NoteSerializer
 from apps.notes.services import ensure_default_categories
 
 
-class CategoryListView(generics.ListAPIView):
+def _user(request: Request) -> User:
+    """Narrow ``request.user`` for views gated by ``IsAuthenticated``.
+
+    DRF/django-stubs type ``request.user`` as ``AbstractBaseUser |
+    AnonymousUser`` since it doesn't know about the view's permission
+    classes; every view here requires authentication (via
+    ``DEFAULT_PERMISSION_CLASSES`` or an explicit ``IsAuthenticated``), so at
+    runtime it is always a real, authenticated ``User`` by the time these
+    methods run.
+    """
+    return cast(User, request.user)
+
+
+class CategoryListView(generics.ListAPIView[Category]):
     serializer_class = CategorySerializer
 
-    def get_queryset(self):
-        ensure_default_categories(self.request.user)
+    def get_queryset(self) -> QuerySet[Category]:
+        user = _user(self.request)
+        ensure_default_categories(user)
         return (
-            Category.objects.filter(user=self.request.user)
-            .annotate(note_count=Count("notes"))
-            .order_by("name")
+            Category.objects.filter(user=user).annotate(note_count=Count("notes")).order_by("name")
         )
 
 
-class NoteListCreateView(generics.ListCreateAPIView):
+class NoteListCreateView(generics.ListCreateAPIView[Note]):
     serializer_class = NoteSerializer
 
-    def get_queryset(self):
-        qs = Note.objects.filter(user=self.request.user).select_related("category")
+    def get_queryset(self) -> QuerySet[Note]:
+        qs = Note.objects.filter(user=_user(self.request)).select_related("category")
         category = self.request.query_params.get("category")
         if category:
             qs = qs.filter(category_id=category)
         return qs
 
 
-class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
+class NoteDetailView(generics.RetrieveUpdateDestroyAPIView[Note]):
     serializer_class = NoteSerializer
     permission_classes = [IsAuthenticated, IsOwner]
 
-    def get_queryset(self):
-        return Note.objects.filter(user=self.request.user).select_related("category")
+    def get_queryset(self) -> QuerySet[Note]:
+        return Note.objects.filter(user=_user(self.request)).select_related("category")
 
 
 class SeedStagingView(APIView):
@@ -57,11 +72,12 @@ class SeedStagingView(APIView):
                 {"detail": "Seeding is not allowed in production."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        ensure_default_categories(request.user)
-        cat = Category.objects.filter(user=request.user, name="Random Thoughts").first()
+        user = _user(request)
+        ensure_default_categories(user)
+        cat = Category.objects.filter(user=user, name="Random Thoughts").first()
         assert cat is not None
         note, created = Note.objects.get_or_create(
-            user=request.user,
+            user=user,
             title="Grocery List",
             defaults={
                 "category": cat,

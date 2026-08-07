@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 from rest_framework import serializers
 
 from apps.notes.models import Category, Note
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(serializers.ModelSerializer[Category]):
     note_count = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -14,7 +16,7 @@ class CategorySerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "note_count", "created_at")
 
 
-class NoteSerializer(serializers.ModelSerializer):
+class NoteSerializer(serializers.ModelSerializer[Note]):
     category_name = serializers.CharField(source="category.name", read_only=True)
     category_color = serializers.CharField(source="category.color", read_only=True)
 
@@ -38,6 +40,6 @@ class NoteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid category.")
         return category
 
-    def create(self, validated_data: dict) -> Note:
+    def create(self, validated_data: dict[str, Any]) -> Note:
         validated_data["user"] = self.context["request"].user
         return super().create(validated_data)

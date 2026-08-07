@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -175,7 +176,7 @@ CLOUDWATCH_ENABLED = os.getenv("CLOUDWATCH_ENABLED", "false").lower() in ("1", "
 CLOUDWATCH_LOG_GROUP = os.getenv("CLOUDWATCH_LOG_GROUP", "")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
 
-LOGGING = {
+LOGGING: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {

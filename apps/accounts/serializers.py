@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 
-class RegisterSerializer(serializers.Serializer):
+class RegisterSerializer(serializers.Serializer[User]):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, min_length=8)
 
@@ -25,7 +27,7 @@ class RegisterSerializer(serializers.Serializer):
         validate_password(value)
         return value
 
-    def create(self, validated_data: dict) -> User:
+    def create(self, validated_data: dict[str, Any]) -> User:
         email = validated_data["email"]
         user = User.objects.create_user(
             username=email,
@@ -35,11 +37,11 @@ class RegisterSerializer(serializers.Serializer):
         return user
 
 
-class LoginSerializer(serializers.Serializer):
+class LoginSerializer(serializers.Serializer[Any]):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
-    def validate(self, attrs: dict) -> dict:
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         email = attrs["email"].lower().strip()
         user = authenticate(
             request=self.context.get("request"),
@@ -55,7 +57,7 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer[User]):
     class Meta:
         model = User
         fields = ("id", "email", "date_joined")
