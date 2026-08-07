@@ -1,0 +1,44 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["apps", "config"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/migrations/*" = ["E501"]
+"**/tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+strict = true
+warn_unused_ignores = true
+exclude = ["migrations/", ".venv/", "mcp/"]
+
+[[tool.mypy.overrides]]
+module = ["axes.*", "watchtower.*"]
+ignore_missing_imports = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
+
+[tool.coverage.run]
+source = ["apps"]
+omit = [
+  "*/migrations/*",
+  "*/tests/*",
+  "*/apps.py",
+  "*/admin.py",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
