@@ -6,7 +6,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -15,36 +14,69 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='Category',
+            name="Category",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=100)),
-                ('color', models.CharField(help_text='Hex color e.g. #E9A680', max_length=7)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='categories', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                    ),
+                ),
+                ("name", models.CharField(max_length=100)),
+                ("color", models.CharField(help_text="Hex color e.g. #E9A680", max_length=7)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="categories",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'categories',
-                'ordering': ['name'],
+                "verbose_name_plural": "categories",
+                "ordering": ["name"],
             },
         ),
         migrations.CreateModel(
-            name='Note',
+            name="Note",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('title', models.CharField(blank=True, default='', max_length=255)),
-                ('body', models.TextField(blank=True, default='')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('category', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='notes', to='notes.category')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='notes', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                    ),
+                ),
+                ("title", models.CharField(blank=True, default="", max_length=255)),
+                ("body", models.TextField(blank=True, default="")),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "category",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="notes",
+                        to="notes.category",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="notes",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-updated_at'],
+                "ordering": ["-updated_at"],
             },
         ),
         migrations.AddConstraint(
-            model_name='category',
-            constraint=models.UniqueConstraint(fields=('user', 'name'), name='uniq_category_per_user'),
+            model_name="category",
+            constraint=models.UniqueConstraint(
+                fields=("user", "name"), name="uniq_category_per_user"
+            ),
         ),
     ]

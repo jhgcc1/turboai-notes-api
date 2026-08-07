@@ -127,8 +127,9 @@ def test_model_str(user: User) -> None:
 
 @pytest.mark.django_db
 def test_is_owner_permission(user: User, other: User) -> None:
-    from apps.notes.permissions import IsOwner
     from unittest.mock import MagicMock
+
+    from apps.notes.permissions import IsOwner
 
     cat = Category.objects.create(user=user, name="Personal", color="#9EBAB0")
     note = Note.objects.create(user=user, category=cat, title="t", body="b")

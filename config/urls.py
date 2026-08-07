@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from apps.accounts.views import HealthView
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-
-from apps.accounts.views import HealthView
 
 urlpatterns = [
     path("admin/", admin.site.urls),

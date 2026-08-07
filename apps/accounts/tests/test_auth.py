@@ -99,7 +99,7 @@ def test_register_login_me_logout_refresh(api: APIClient) -> None:
     else:
         assert refresh_body.status_code == status.HTTP_200_OK
 
-    login3 = api.post(
+    api.post(
         reverse("auth-login"),
         {"email": "new@example.com", "password": "StrongPass123!"},
         format="json",
@@ -155,9 +155,10 @@ def test_disabled_user_login(api: APIClient, user: User, monkeypatch: pytest.Mon
 
 @pytest.mark.django_db
 def test_cookie_auth_no_cookie_returns_none(api: APIClient) -> None:
-    from apps.accounts.authentication import CookieJWTAuthentication
-    from rest_framework.request import Request
     from django.test import RequestFactory
+    from rest_framework.request import Request
+
+    from apps.accounts.authentication import CookieJWTAuthentication
 
     factory = RequestFactory()
     django_req = factory.get("/api/auth/me/")
@@ -200,8 +201,9 @@ def test_cookie_jwt_auth_and_bearer(api: APIClient, user: User) -> None:
 
 @pytest.mark.django_db
 def test_set_clear_cookies_with_domain(settings, api: APIClient) -> None:
-    from apps.accounts.cookies import clear_auth_cookies, set_auth_cookies
     from django.http import HttpResponse
+
+    from apps.accounts.cookies import clear_auth_cookies, set_auth_cookies
 
     settings.COOKIE_DOMAIN = "example.com"
     settings.COOKIE_SECURE = True
