@@ -115,6 +115,8 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+# Never allow credentials + wildcard; django-cors-headers also rejects this combo.
+CORS_ALLOW_ALL_ORIGINS = False
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
@@ -122,11 +124,41 @@ CSRF_TRUSTED_ORIGINS = [
     if o.strip()
 ]
 
+
+def _assert_deployed_origin_allowlist(env: str, label: str, origins: list[str]) -> None:
+    """Staging/prod must allow only that environment's frontend origin(s).
+
+    No wildcards, no localhost, and the list must be non-empty. Local/docker
+    keep localhost via env defaults; Terraform sets each ECS task def to its
+    own CloudFront web URL only.
+    """
+    if env not in ("staging", "production"):
+        return
+    if not origins:
+        raise ValueError(f"{label} must be set in {env} (frontend origin allowlist)")
+    for origin in origins:
+        lowered = origin.lower()
+        if origin == "*" or "://" + "*" in origin or lowered.endswith("://*"):
+            raise ValueError(f"{label} must not use wildcards in {env}: {origin!r}")
+        if "localhost" in lowered or "127.0.0.1" in lowered:
+            raise ValueError(f"{label} must not include localhost in {env}: {origin!r}")
+
+
+_assert_deployed_origin_allowlist(ENVIRONMENT, "CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS)
+_assert_deployed_origin_allowlist(ENVIRONMENT, "CSRF_TRUSTED_ORIGINS", CSRF_TRUSTED_ORIGINS)
+
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "Lax")
 COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN") or None
 ACCESS_COOKIE_NAME = "access_token"
 REFRESH_COOKIE_NAME = "refresh_token"
+
+# Staging SPA and API sit on different CloudFront domains, so JWT cookies use
+# SameSite=None. Django's CSRF/session cookies default to Lax, which browsers
+# will not send on cross-site POSTs — CSRF then fails even when the SPA sends
+# X-CSRFToken. Keep all three aligned with COOKIE_SAMESITE.
+CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
+SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE
 
 ACCESS_TOKEN_LIFETIME_MINUTES = int(os.getenv("ACCESS_TOKEN_LIFETIME_MINUTES", "15"))
 REFRESH_TOKEN_LIFETIME_DAYS = int(os.getenv("REFRESH_TOKEN_LIFETIME_DAYS", "7"))

@@ -36,7 +36,24 @@ def test_health(api: APIClient) -> None:
 def test_csrf_sets_cookie(api: APIClient) -> None:
     res = api.get(reverse("auth-csrf"))
     assert res.status_code == status.HTTP_200_OK
-    assert "csrftoken" in res.cookies or res.data["detail"]
+    assert "csrftoken" in res.cookies
+    assert res.data["detail"]
+    # Body token is Django's masked value for X-CSRFToken; cookie holds the secret.
+    assert res.data["csrfToken"]
+    assert isinstance(res.data["csrfToken"], str)
+
+
+@pytest.mark.django_db
+def test_csrf_cookie_samesite_follows_cookie_samesite(
+    settings: DjangoTestSettings, api: APIClient
+) -> None:
+    """Cross-origin staging needs SameSite=None on csrftoken, not Django's Lax default."""
+    settings.COOKIE_SAMESITE = "None"
+    settings.CSRF_COOKIE_SAMESITE = "None"
+    settings.CSRF_COOKIE_SECURE = True
+    res = api.get(reverse("auth-csrf"))
+    assert res.status_code == status.HTTP_200_OK
+    assert res.cookies["csrftoken"]["samesite"] == "None"
 
 
 @pytest.mark.django_db
@@ -216,7 +233,8 @@ def test_cookie_auth_enforces_csrf(user: User) -> None:
     assert denied.status_code == status.HTTP_403_FORBIDDEN
 
     csrf_res = strict.get(reverse("auth-csrf"))
-    token = csrf_res.cookies["csrftoken"].value
+    # Prefer the body token (what the SPA sends cross-origin); cookie secret also works.
+    token = csrf_res.data["csrfToken"]
     ok = strict.post(reverse("auth-logout"), format="json", HTTP_X_CSRFTOKEN=token)
     assert ok.status_code == status.HTTP_200_OK
 

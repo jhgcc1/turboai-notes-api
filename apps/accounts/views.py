@@ -7,6 +7,7 @@ from typing import Any, cast
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as django_login
 from django.contrib.auth.models import User
+from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
@@ -50,7 +51,9 @@ class CsrfView(APIView):
     authentication_classes = NoAuth
 
     def get(self, request: Request) -> Response:
-        return Response({"detail": "CSRF cookie set"})
+        # Return the token in the body too: the SPA cannot read a cross-origin
+        # csrftoken cookie via document.cookie (frontend CF ≠ API CF).
+        return Response({"detail": "CSRF cookie set", "csrfToken": get_token(request)})
 
 
 class RegisterView(APIView):

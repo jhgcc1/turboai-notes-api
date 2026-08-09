@@ -456,6 +456,8 @@ resource "aws_ecs_task_definition" "api" {
       { name = "CLOUDWATCH_ENABLED", value = "true" },
       { name = "CLOUDWATCH_LOG_GROUP", value = aws_cloudwatch_log_group.api.name },
       { name = "AWS_REGION", value = var.aws_region },
+      # Strict per-environment frontend origin only (this stack's web CF).
+      # Never "*" / localhost / the other env's URL — credentials CORS + CSRF.
       { name = "CORS_ALLOWED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
       { name = "CSRF_TRUSTED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
       { name = "FRONTEND_URL", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
