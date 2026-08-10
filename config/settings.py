@@ -253,18 +253,16 @@ CSRF_COOKIE_HTTPONLY = False
 # just prod — the session/CSRF cookies (and HSTS) should be locked down there
 # as well, not only when ENVIRONMENT == "production".
 #
-# SECURE_SSL_REDIRECT is intentionally NOT extended to staging here: CloudFront
-# talks plain HTTP to the ALB origin (no SECURE_PROXY_SSL_HEADER is configured
-# for that hop), so request.is_secure() is always False and turning this on
-# would redirect (301) the ALB health check itself, marking the service
-# unhealthy. See docs/process security audit for the recommended follow-up
-# (configure SECURE_PROXY_SSL_HEADER from a trusted CloudFront-set header).
+# SECURE_SSL_REDIRECT stays off for staging AND production: CloudFront talks
+# plain HTTP to the ALB origin (no SECURE_PROXY_SSL_HEADER on that hop), so
+# request.is_secure() is always False. Enabling redirect 301s the ALB health
+# check and CloudFront viewer requests into a loop. TLS terminates at
+# CloudFront; cookies/HSTS below still lock down browser traffic. Follow-up:
+# configure SECURE_PROXY_SSL_HEADER from a trusted CloudFront-set header.
 if ENVIRONMENT in ("staging", "production"):
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-
-if ENVIRONMENT == "production":
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = False
