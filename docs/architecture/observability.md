@@ -55,14 +55,13 @@ Inside `handler.process_alarm`, every step is a single function in
 | L6. Build report | `triage/notify.py` | Render the plain-text report. |
 | **J3. Create issue** | `triage/jira.py` | When `JIRA_ENABLED=true`: `POST /rest/api/3/issue` with the analysis summary, ADF description (including a **CloudWatch** Logs Insights deep link filtered by fingerprint/request_id), severity prefix, and labels. Returns the issue key, or `None` if disabled or Jira fails. Errors are logged and swallowed — never block the e-mail. |
 | **D4. Attach issue** | `triage/dedup.py` | Persist the returned key on the DynamoDB item so future occurrences of the same fingerprint comment on the existing ticket instead of opening a new one. |
-| **N4. Send e-mail** | `triage/notify.py` | Publish to `<name>-triage-reports` (or send via SES). Subject prefixes `[KEY]` when Jira returned a key, body gains a `Jira: <browse-url>` line, or an `Existing ticket: <key>` line when dedup found one. SNS delivers to the address from `TF_VAR_ops_email`. |
+| **N4. Send e-mail** | `triage/notify.py` | Publish to `<name>-triage-reports` (or send via SES). Subject prefixes `[KEY]` when Jira returned a key; body gains a `Jira: <browse-url>` (or `Existing ticket: <key>`) line plus a `CloudWatch: <console-url>` line from `triage/cloudwatch.py`. SNS delivers to the address from `TF_VAR_ops_email`. |
 
 Jira and the e-mail are independent by design: a Jira outage still leaves
 you with an inbox report, and a mail outage still leaves the ticket open.
 The same analysis object feeds both, so what arrives in the e-mail matches
 what lands in the ticket — same severity, same summary, same labels, same
 suggested fix.
-```
 
 ### Two topics, on purpose
 
@@ -221,7 +220,7 @@ latency percentiles, database load, and a live table of recent errors.
 
 3. **Populate the Jira secret** (when `jira_enabled = true`). Same out-of-band
    pattern; the token never enters the state file. Staging is already enabled
-   (`jira_enabled=true`, project `OPS` on `https://joaocavalcanti002.atlassian.net`)
+   (`jira_enabled=true`, project `KAN` on `https://joaocavalcanti002.atlassian.net`)
    with `turboai-notes-staging-jira-credentials` populated — see
    `docs/process/17-observability-staging-apply.md`.
 
@@ -284,14 +283,22 @@ of a fingerprint, and the email that goes out always links to the ticket. The
 path:
 
 ```
-analyse -> create_issue (POST /rest/api/3/issue) -> dedup.attach_issue
-   -> build_report(subject=[OPS-42] ..., body "Jira: https://.../browse/OPS-42")
+analyse -> cloudwatch.build_cloudwatch_url
+   -> create_issue (POST /rest/api/3/issue, ADF includes CloudWatch deep link)
+   -> dedup.attach_issue
+   -> build_report(subject=[KAN-42] ..., body "Jira: …/browse/KAN-42"
+                   + "CloudWatch: <Logs Insights console URL>")
    -> SNS / SES
 ```
 
+`triage/cloudwatch.py` builds a region-scoped console URL: prefer Logs Insights
+filtered by `fingerprint` and/or `request_id`, else the log stream, else the
+log group. The same URL is embedded in the Jira ADF description ("Open logs")
+and printed as a `CloudWatch:` line in the email.
+
 The next time the same fingerprint shows up, the `issue_key` already lives in
 the DynamoDB record so the Lambda skips the create call and the email starts
-with `Existing ticket: OPS-42` (or, when the operator simply files the
+with `Existing ticket: KAN-42` (or, when the operator simply files the
 follow-up under the existing key, the report body points to the same URL).
 This is the "comment on existing ticket" behaviour described in the design
 notes — there is no separate `POST .../comment` today, the email is the
@@ -335,16 +342,15 @@ never logged.
 
 ### Format of the issue
 
-- **Project**: from `JIRA_PROJECT_KEY`.
+- **Project**: from `JIRA_PROJECT_KEY` (staging: `KAN`).
 - **Issue type**: from `JIRA_ISSUE_TYPE`, default `Bug`.
 - **Summary**: `[{SEVERITY}] {analysis.summary}` (truncated to 255 chars).
 - **Labels**: `analysis.labels`, de-duplicated and capped at 10.
 - **Description**: Atlassian Document Format (ADF), **not** markdown.
-  `Root cause`, `Suspected locations`, `Fix steps`, `Reproduction` and
-  the proposed patch (as a `diff` code block) are emitted as ADF
-  paragraphs / headings / bullet lists. The self-link to the ticket is
-  rendered as an ADF link node, not as a URL string.
-
-The `self` field can only be filled in **after** the create call returns
-the key, so the description is sent without the link and the email is
-what carries it.
+  Metadata (environment, alarm, fingerprint, request id, log group,
+  occurrences, severity), then a **CloudWatch** heading with an “Open logs”
+  ADF link to the Logs Insights deep link from `triage/cloudwatch.py`, then
+  `Root cause`, `Suspected locations`, `Fix steps`, `Reproduction` and the
+  proposed patch (as a `diff` code block). The Jira browse/`self` URL is
+  known only after create returns the key, so the ticket body does not embed
+  its own browse link — the email carries `Jira: https://…/browse/KAN-…`.
