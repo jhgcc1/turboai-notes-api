@@ -21,6 +21,8 @@ terraform/**/tfplan*
 terraform/**/*.tfstate*
 terraform/**/*.tfvars
 !terraform/**/*.tfvars.example
+# Lambda artifact rebuilt from source by archive_file on every plan.
+terraform/**/*.zip
 mcp/.venv/
 mcp/logs/
 *.pem

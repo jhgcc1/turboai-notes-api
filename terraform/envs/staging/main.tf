@@ -31,6 +31,12 @@ variable "bastion_ssh_cidr" {
   default     = ["187.123.69.5/32"]
 }
 
+variable "ops_email" {
+  type        = string
+  description = "Address that receives triage reports. Confirm the SNS subscription email after apply."
+  default     = ""
+}
+
 module "stack" {
   source             = "../../modules/stack"
   environment        = "staging"
@@ -40,6 +46,21 @@ module "stack" {
   image_tag          = var.image_tag
   bastion_public_key = trimspace(file("${path.module}/../../bastion.pub"))
   bastion_ssh_cidr   = var.bastion_ssh_cidr
+}
+
+module "observability" {
+  source                  = "../../modules/observability"
+  environment             = "staging"
+  aws_region              = var.aws_region
+  repo_root               = abspath("${path.module}/../../..")
+  log_group_name          = module.stack.log_group
+  log_group_arn           = module.stack.log_group_arn
+  alb_arn_suffix          = module.stack.alb_arn_suffix
+  target_group_arn_suffix = module.stack.target_group_arn_suffix
+  ecs_cluster_name        = module.stack.ecs_cluster_name
+  ecs_service_name        = module.stack.ecs_service_name
+  db_instance_id          = module.stack.rds_instance_id
+  ops_email               = var.ops_email
 }
 
 output "api_url" { value = module.stack.api_url }
@@ -52,6 +73,11 @@ output "bastion_host" { value = module.stack.bastion_host }
 output "bastion_instance_id" { value = module.stack.bastion_instance_id }
 output "bastion_key_name" { value = module.stack.bastion_key_name }
 output "log_group" { value = module.stack.log_group }
+output "alarms_topic_arn" { value = module.observability.alarms_topic_arn }
+output "reports_topic_arn" { value = module.observability.reports_topic_arn }
+output "triage_function_name" { value = module.observability.triage_function_name }
+output "llm_secret_arn" { value = module.observability.llm_secret_arn }
+output "observability_dashboard" { value = module.observability.dashboard_name }
 output "ecs_cluster_name" { value = module.stack.ecs_cluster_name }
 output "ecs_service_name" { value = module.stack.ecs_service_name }
 output "alb_dns_name" { value = module.stack.alb_dns_name }
