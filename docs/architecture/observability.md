@@ -201,14 +201,24 @@ latency percentiles, database load, and a live table of recent errors.
 ### Secrets inventory (triage-related)
 
 These live in AWS Secrets Manager (`us-east-2`, account `615737882760`) and are
-**never** GitHub Secrets. Django ECS and the Next.js SPA do not read them.
+**SM only — not in GitHub**. Django ECS and the Next.js SPA do not read them.
 Full cross-system inventory (including GitHub, ECS, bastion PEM, MCP `.env`) is
-in the architecture HTML §6.
+in the architecture HTML §6 (`#sm-only-rationale`).
 
 | Secret name | Staging | Prod | Used by |
 | --- | --- | --- | --- |
-| `turboai-notes-{env}-llm-credentials` | Exists; MiniMax `api_key` populated | Exists; may still be Terraform `REPLACE_ME` until `put-secret-value` | Triage Lambda only (`LLM_SECRET_ID`). JSON: `api_key`, `base_url`, `model`. |
-| `turboai-notes-{env}-jira-credentials` | Exists + populated; `jira_enabled=true` (project `KAN`) | **Not created** — `jira_enabled=false` in `envs/prod` | Triage Lambda only when `JIRA_ENABLED=true`. JSON: `base_url`, `email`, `api_token`. |
+| `turboai-notes-{env}-llm-credentials` | Exists; MiniMax `api_key` populated | Exists; may still be Terraform `REPLACE_ME` until `put-secret-value` | Triage Lambda only (`LLM_SECRET_ID`). JSON: `api_key`, `base_url`, `model`. SM only — not in GitHub. |
+| `turboai-notes-{env}-jira-credentials` | Exists + populated; `jira_enabled=true` (project `KAN`) | **Not created** — `jira_enabled=false` in `envs/prod` | Triage Lambda only when `JIRA_ENABLED=true`. JSON: `base_url`, `email`, `api_token`. SM only — not in GitHub. |
+
+**Why SM-only (no GitHub → SM sync):** Terraform creates these secrets with a
+`REPLACE_ME` placeholder and `ignore_changes` on `secret_string`, so deploy
+applies never overwrite live API tokens. Operators set values out-of-band with
+`aws secretsmanager put-secret-value` (not `TF_VAR_*` / not GitHub Secrets).
+Only the triage Lambda reads them at runtime. Keeping third-party API tokens out
+of GitHub shrinks blast radius and rotation surface. By contrast,
+`DJANGO_SECRET_KEY` / `DB_PASSWORD` must be available to Terraform at apply time
+(RDS + ECS), so those correctly flow GitHub Secrets → Terraform → Secrets
+Manager → ECS.
 
 ECS still uses separate SM secrets for Django (`…-django-secret-key` →
 `SECRET_KEY`) and Postgres (`…-db-password` → `POSTGRES_PASSWORD`); those are
