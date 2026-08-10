@@ -37,21 +37,26 @@ variable "ops_email" {
   default     = ""
 }
 
-# Optional Jira wiring. Disabled by default; flip jira_enabled to true and set
-# jira_project_key (e.g. "OPS") to start creating tickets. The credentials
-# themselves live in Secrets Manager and are populated out of band — see
-# docs/architecture/observability.md for the put-secret-value command.
+# Optional Jira wiring. Keep jira_enabled=true so Deploy CI (no TF_VAR_jira_*)
+# does not tear the secret down. Credentials live in Secrets Manager and are
+# populated out of band — see docs/architecture/observability.md.
 variable "jira_enabled" {
   type        = bool
   description = "When true, the triage Lambda creates a Jira issue per first sighting and links it in the email."
-  # Staging wired 2026-08-10 to joaocavalcanti002.atlassian.net / OPS. Keep true so Deploy CI (no TF_VAR_jira_*) does not tear the secret down.
+  # Staging wired 2026-08-10 to joaocavalcanti002.atlassian.net; project KAN.
   default     = true
 }
 
 variable "jira_project_key" {
   type        = string
-  description = "Jira project key (e.g. \"OPS\"). Required when jira_enabled is true."
-  default     = "OPS"
+  description = "Jira project key (e.g. \"KAN\"). Required when jira_enabled is true."
+  default     = "KAN"
+}
+
+variable "jira_base_url" {
+  type        = string
+  description = "Public Jira site URL used in triage email browse links."
+  default     = "https://joaocavalcanti002.atlassian.net"
 }
 
 variable "jira_issue_type" {
@@ -86,6 +91,7 @@ module "observability" {
   ops_email               = var.ops_email
   jira_enabled            = var.jira_enabled
   jira_project_key        = var.jira_project_key
+  jira_base_url           = var.jira_base_url
   jira_issue_type         = var.jira_issue_type
 }
 

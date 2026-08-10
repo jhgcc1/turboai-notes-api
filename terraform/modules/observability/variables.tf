@@ -144,7 +144,13 @@ variable "jira_enabled" {
 
 variable "jira_project_key" {
   type        = string
-  description = "Jira project key (e.g. \"OPS\") the Lambda files issues under. Required when jira_enabled is true; ignored otherwise."
+  description = "Jira project key (e.g. \"KAN\") the Lambda files issues under. Required when jira_enabled is true; ignored otherwise."
+  default     = ""
+}
+
+variable "jira_base_url" {
+  type        = string
+  description = "Optional public Jira site URL for browse links in email (e.g. https://example.atlassian.net). When empty the Lambda falls back to base_url from the credentials secret."
   default     = ""
 }
 

@@ -313,3 +313,17 @@ def create_issue(
 def browse_url(base_url: str, issue_key: str) -> str:
     """Public helper: build the operator-facing ``/browse/...`` link."""
     return _browser_url(base_url, issue_key)
+
+
+def resolve_base_url(settings: Settings) -> str:
+    """Return ``JIRA_BASE_URL`` or the secret's ``base_url`` (never raises)."""
+    if settings.jira_base_url:
+        return settings.jira_base_url.rstrip("/")
+    if not settings.jira_secret_id:
+        return ""
+    try:
+        base_url, _email, _token = _resolve_credentials(settings)
+    except (ConfigError, JiraError):
+        return ""
+    return base_url
+

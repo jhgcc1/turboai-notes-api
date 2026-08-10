@@ -14,29 +14,21 @@ produced no log line at all: DRF turns exceptions into responses silently.
 ## Flow
 
 ```
-ECS Fargate task (Django + gunicorn)
-  stdout -> awslogs driver -> CloudWatch Logs  /turboai/notes/<env>/api
-                                    |
-                                    | metric filter  { $.level = "ERROR" }
-                                    v
-                     custom metric  turboai/notes/<env>  AppErrorCount
-                                    |
-                                    | alarm: >= N errors in 5 min
-                                    v
-                          SNS topic  <name>-alarms
-                                    |
-                                    v
-                    Lambda  <name>-triage  (python3.12, stdlib + boto3)
-                      1. Logs Insights: sample recent ERROR rows
-                      2. group by fingerprint, pick the loudest
-                      3. DynamoDB: count occurrences, decide if new
-                      4. resolve traceback frames to bundled source code
-                      5. MiniMax: root cause + proposed patch
-                      6. render plain-text report
-                                    |
-                                    v
-                     SNS topic  <name>-triage-reports  -> email
-                                (or SES when configured)
+Browser (static Next.js export)                 ECS Fargate (Django)
+  window.onerror / unhandledrejection             JSON ERROR logs (stdout)
+           |                                                |
+           | POST /api/observability/client-error/           |
+           v                                                v
+        Django logs structured JSON ERROR  -----------------+
+                            |
+                            | CloudWatch Logs  /turboai/notes/<env>/api
+                            | metric filter  { $.level = "ERROR" }
+                            v
+             custom metric  AppErrorCount → alarm → SNS → triage Lambda
+                            |
+                            | MiniMax analysis + Jira project KAN (staging)
+                            v
+                     SNS triage-reports → email (+ Jira browse link)
 ```
 
 ### Lambda pipeline — where each thing happens
@@ -96,9 +88,13 @@ false alarm and burn an LLM call on a non-incident.
 | `config/exception_handler.py` | ERROR for 5xx, WARNING for 4xx | Every DRF exception, with `exc_info` and a fingerprint |
 | `config/middleware.py` | ERROR | Any response with status >= 500 |
 | `apps/accounts/views.py` | WARNING | Token blacklist and refresh rejections that were previously swallowed |
+| `apps/observability/views.py` | ERROR | Browser client errors POSTed to `/api/observability/client-error/` (size-capped, rate-limited; CSRF enforced when cookie-authed) |
 
-4xx stays at WARNING deliberately. Logging client mistakes at ERROR would make
-the alarm fire on ordinary bad requests.
+4xx stays at WARNING deliberately. Logging ordinary client mistakes at ERROR would make
+the alarm fire on bad requests. Browser runtime failures are different: the SPA is a
+static export and cannot talk to CloudWatch, so it POSTs to the API, which emits a
+single structured ERROR line and reuses the same CloudWatch → Lambda → MiniMax → Jira
+pipeline.
 
 ### One shipper, not two
 
@@ -258,7 +254,7 @@ operators can adjust them per environment without touching code:
 | `LLM_MODEL` | `MiniMax-M2.1` | Model id used for analysis. |
 | `JIRA_ENABLED` | `false` | When `true`, the Lambda creates a Jira issue for the first sighting of a fingerprint and links the ticket in the email. Disabled envs never touch the Jira API. |
 | `JIRA_BASE_URL` | (empty) | Reserved for the future — the actual base URL is read from the secret so it never sits in `lambda:GetFunctionConfiguration`. Must remain empty. |
-| `JIRA_PROJECT_KEY` | (empty) | Jira project key (e.g. `OPS`, `BACK`). Required when `JIRA_ENABLED=true`. |
+| `JIRA_PROJECT_KEY` | (empty) | Jira project key (e.g. `KAN`, `OPS`). Required when `JIRA_ENABLED=true`. |
 | `JIRA_ISSUE_TYPE` | `Bug` | Jira issue type created by the Lambda (`Task`, `Story`, `Incident` all work). |
 | `DRY_RUN` | `false` | When `true`, run the full pipeline but write the report to logs instead of sending email. |
 

@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "axes",
     "apps.accounts",
     "apps.notes",
+    "apps.observability",
 ]
 
 MIDDLEWARE = [
@@ -185,6 +186,9 @@ REST_FRAMEWORK = {
         "anon": "50/hour",
         "user": "1000/hour",
         "auth": "20/minute",
+        # Browser error reports: tight anon budget, looser for signed-in users.
+        "client_error": "30/hour",
+        "client_error_user": "120/hour",
     },
 }
 

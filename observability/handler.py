@@ -122,7 +122,8 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
                 group.fingerprint,
                 issue_key,
             )
-    issue_browse_url = jira.browse_url(settings.jira_base_url, issue_key) if issue_key else None
+    base_url = settings.jira_base_url or jira.resolve_base_url(settings)
+    issue_browse_url = jira.browse_url(base_url, issue_key) if issue_key and base_url else None
 
     report = build_report(
         analysis,

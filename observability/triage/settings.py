@@ -80,7 +80,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         jira_enabled = _flag("JIRA_ENABLED")
-        jira_base_url = _require_when(jira_enabled, "JIRA_BASE_URL")
+        # Browse URL may also be read from the Jira secret's base_url; env is optional.
+        jira_base_url = os.getenv("JIRA_BASE_URL", "").strip().rstrip("/")
         jira_project_key = _require_when(jira_enabled, "JIRA_PROJECT_KEY")
         jira_secret_id = _require_when(jira_enabled, "JIRA_SECRET_ID")
         return cls(

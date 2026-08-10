@@ -265,11 +265,46 @@ def test_settings_from_env_requires_jira_vars_when_enabled(monkeypatch: pytest.M
         "DEDUP_TABLE",
         "LLM_SECRET_ID",
         "SNS_TOPIC_ARN",
-        "JIRA_BASE_URL",
         "JIRA_SECRET_ID",
     ):
         monkeypatch.setenv(name, "x")
     monkeypatch.setenv("JIRA_ENABLED", "true")
     monkeypatch.delenv("JIRA_PROJECT_KEY", raising=False)
+    monkeypatch.delenv("JIRA_BASE_URL", raising=False)
     with pytest.raises(ConfigError):
         Settings.from_env()
+
+
+def test_settings_allows_empty_jira_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "CW_LOG_GROUP",
+        "DEDUP_TABLE",
+        "LLM_SECRET_ID",
+        "SNS_TOPIC_ARN",
+        "JIRA_SECRET_ID",
+        "JIRA_PROJECT_KEY",
+    ):
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("JIRA_ENABLED", "true")
+    monkeypatch.delenv("JIRA_BASE_URL", raising=False)
+    settings = Settings.from_env()
+    assert settings.jira_base_url == ""
+
+
+def test_resolve_base_url_prefers_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(jira_base_url="https://from-env.atlassian.net")
+    assert jira.resolve_base_url(settings) == "https://from-env.atlassian.net"
+
+
+def test_resolve_base_url_falls_back_to_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(jira_base_url="")
+    monkeypatch.setattr(
+        jira,
+        "load_secret",
+        lambda _sid: {
+            "base_url": "https://from-secret.atlassian.net",
+            "email": "a@b.com",
+            "api_token": "tok",
+        },
+    )
+    assert jira.resolve_base_url(settings) == "https://from-secret.atlassian.net"

@@ -478,7 +478,7 @@ resource "aws_lambda_function" "triage" {
       },
       var.jira_enabled ? {
         JIRA_ENABLED     = tostring(var.jira_enabled)
-        JIRA_BASE_URL    = "" # base_url lives in the secret; the Lambda reads it from there
+        JIRA_BASE_URL    = var.jira_base_url # optional; secret base_url used when empty
         JIRA_PROJECT_KEY = var.jira_project_key
         JIRA_ISSUE_TYPE  = var.jira_issue_type
         JIRA_SECRET_ID   = local.jira_secret_arn
