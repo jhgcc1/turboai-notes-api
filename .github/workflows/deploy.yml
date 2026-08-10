@@ -27,8 +27,8 @@ jobs:
       name: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
     env:
       TF_ENV: ${{ github.event_name == 'release' && 'prod' || (github.event_name == 'workflow_dispatch' && inputs.environment || 'staging') }}
-      # Account infra is us-east-2; do not fall back to us-east-1.
-      AWS_REGION: us-east-2
+      # Account infra is us-east-2; GitHub Secret preferred, never fall back to us-east-1.
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-2' }}
     steps:
       - uses: actions/checkout@v4
 

@@ -39,7 +39,17 @@ pytest          # 100% coverage gate on apps/
 ruff check .
 ruff format --check .
 mypy apps config
+python manage.py makemigrations --check --dry-run   # CI also runs this
 ```
+
+### Migrations (CI check vs deploy apply)
+
+| When | What | Where |
+|------|------|--------|
+| **CI** (every PR/push) | `makemigrations --check --dry-run` — fails if model changes lack a committed migration | `.github/workflows/ci.yml` (SQLite; never touches RDS) |
+| **Deploy** (staging + prod) | `migrate --noinput` on every new ECS task start | `scripts/entrypoint.sh` (Docker `ENTRYPOINT`) after force-new-deployment |
+
+CI does **not** apply migrations to staging/prod. Apply is defense-in-depth on container boot so each rolled task brings the env’s RDS schema forward; we do not also run a separate ECS one-off migrate in `deploy.yml` (avoids double-migrate races).
 
 ## Auth
 
