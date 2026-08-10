@@ -68,6 +68,15 @@ class ClientErrorView(APIView):
         authenticated = bool(user is not None and getattr(user, "is_authenticated", False))
         user_id = getattr(user, "id", None) if authenticated else None
 
+        # Cap matches serializer / FE MAX_STACK. JsonFormatter promotes ``stack``
+        # into the JSON ``exc_info`` field so Logs Insights → triage Lambda can
+        # feed the browser stack to MiniMax (Lambda-only; this view never calls
+        # an LLM). Production FE bundles are typically minified — React
+        # componentStack (source=boundary) is the richest frame data we get.
+        capped_stack = stack[:8000] if stack else ""
+        stack_hint = (
+            "fe_component_stack" if (source or "") == "boundary" else "fe_stack_may_be_minified"
+        )
         extra: dict[str, Any] = {
             "request_id": request_id,
             "method": "CLIENT",
@@ -79,13 +88,15 @@ class ClientErrorView(APIView):
             "user_id": user_id,
             "user_agent": user_agent,
             "source": source or "unknown",
-            "stack": stack[:4000] if stack else "",
+            "stack": capped_stack,
+            "stack_hint": stack_hint,
         }
 
         logger.error(
-            "client_error %s at %s",
+            "client_error %s at %s [%s]",
             message[:200],
             route,
+            stack_hint,
             extra=extra,
         )
         return Response(

@@ -57,6 +57,11 @@ def turbo_exception_handler(exc: Exception, context: dict[str, Any]) -> Response
             exc_info=exc,
             extra=payload,
         )
+        # Prevent RequestLoggingMiddleware from emitting a second, traceback-less
+        # ERROR for the same request (that would dilute fingerprint grouping).
+        request = context.get("request")
+        if request is not None:
+            request._error_logged = True
     else:
         logger.warning(
             "client_error %s at %s -> %s",

@@ -2,7 +2,11 @@
 
 Turns a CloudWatch alarm into a debugged incident report in an inbox: samples
 the ERROR logs behind the alarm, pulls the source code the traceback points at,
-asks MiniMax for a root cause and a patch, and emails the result.
+asks MiniMax for a root cause and a patch, creates a Jira issue (KAN on
+staging), and emails the result.
+
+**MiniMax runs only here.** The Django API and Next.js SPA never call an LLM;
+they only emit structured ERROR logs (FE via `POST /api/observability/client-error/`).
 
 Full design notes: [`docs/architecture/observability.md`](../docs/architecture/observability.md).
 

@@ -15,21 +15,29 @@ produced no log line at all: DRF turns exceptions into responses silently.
 
 ```
 Browser (static Next.js export)                 ECS Fargate (Django)
-  window.onerror / unhandledrejection             JSON ERROR logs (stdout)
+  window.onerror / unhandledrejection             DRF exception handler
+  React ErrorBoundary                             + process_exception
+  reportUnexpected (5xx / programmer errors)      JSON ERROR logs (stdout)
            |                                                |
            | POST /api/observability/client-error/           |
            v                                                v
         Django logs structured JSON ERROR  -----------------+
+        (stack promoted to exc_info; no LLM here)
                             |
                             | CloudWatch Logs  /turboai/notes/<env>/api
                             | metric filter  { $.level = "ERROR" }
                             v
              custom metric  AppErrorCount → alarm → SNS → triage Lambda
                             |
-                            | MiniMax analysis + Jira project KAN (staging)
+                            | MiniMax ONLY inside this Lambda → Jira KAN
                             v
                      SNS triage-reports → email (+ Jira browse link)
 ```
+
+**Hard constraint:** MiniMax (and any LLM API) runs solely in
+`turboai-notes-*-triage`. Django views and the Next.js SPA never call an LLM;
+they only emit structured ERROR logs. `LLM_SECRET_ID` is granted only to the
+triage Lambda IAM role (not the ECS task role).
 
 ### Lambda pipeline — where each thing happens
 
@@ -85,16 +93,19 @@ false alarm and burn an LLM call on a non-incident.
 
 | Source | Level | Notes |
 | --- | --- | --- |
-| `config/exception_handler.py` | ERROR for 5xx, WARNING for 4xx | Every DRF exception, with `exc_info` and a fingerprint |
-| `config/middleware.py` | ERROR | Any response with status >= 500 |
+| `config/exception_handler.py` | ERROR for 5xx, WARNING for 4xx | Every DRF exception, with `exc_info` and a fingerprint; sets `_error_logged` on 5xx |
+| `config/middleware.py` `process_exception` | ERROR | Uncaught non-DRF exceptions with full traceback + fingerprint |
+| `config/middleware.py` `process_response` | ERROR | Status >= 500 only when not already logged (avoids traceback-less duplicates) |
 | `apps/accounts/views.py` | WARNING | Token blacklist and refresh rejections that were previously swallowed |
-| `apps/observability/views.py` | ERROR | Browser client errors POSTed to `/api/observability/client-error/` (size-capped, rate-limited; CSRF enforced when cookie-authed) |
+| `apps/observability/views.py` | ERROR | Browser client errors POSTed to `/api/observability/client-error/` (size-capped, rate-limited; CSRF enforced when cookie-authed). JS `stack` is promoted to JSON `exc_info` by `JsonFormatter` so Logs Insights always samples a traceback. |
 
 4xx stays at WARNING deliberately. Logging ordinary client mistakes at ERROR would make
 the alarm fire on bad requests. Browser runtime failures are different: the SPA is a
 static export and cannot talk to CloudWatch, so it POSTs to the API, which emits a
 single structured ERROR line and reuses the same CloudWatch → Lambda → MiniMax → Jira
-pipeline.
+pipeline. FE stacks are often minified; React `componentStack` (`source=boundary`) is
+the richest client frame data. Expected auth/validation failures (401/400/…) are not
+reported from the SPA catch paths — only unexpected 5xx / programmer errors.
 
 ### One shipper, not two
 

@@ -18,23 +18,32 @@ from triage.logs import ErrorGroup
 SEVERITIES = ("critical", "high", "medium", "low")
 
 SYSTEM_PROMPT = """\
-You are a senior Django engineer debugging a production error for the Turbo AI
-Notes API.
+You are a senior full-stack engineer debugging a production error for Turbo AI
+Notes (Django/DRF API + Next.js static SPA).
 
 Stack: Django 5 + Django REST Framework, PostgreSQL 16, deployed on AWS ECS
-Fargate behind an ALB and CloudFront. Auth uses JWT in httpOnly cookies plus
-django-axes lockout. Layout: apps/accounts (auth), apps/notes (notes and
-categories CRUD, per-user ownership), config (settings, JSON logging, DRF
-exception handler).
+Fargate behind an ALB and CloudFront. Frontend is a static Next.js export on
+S3/CloudFront. Auth uses JWT in httpOnly cookies plus django-axes lockout.
+Layout: apps/accounts (auth), apps/notes (notes and categories CRUD, per-user
+ownership), apps/observability (browser error intake — logs only, never calls
+an LLM), config (settings, JSON logging, DRF exception handler). Frontend
+sources live outside this Lambda bundle; only apps/ + config/ Python are
+available as code excerpts.
 
-You are given the error logs, a file index of the repository, and the actual
-source code around every traceback frame. Use the code — do not speculate about
-lines you were not shown.
+You are given the error logs, a file index of the bundled Python repository,
+and (when frames resolve) source around traceback frames. Use the code — do
+not speculate about lines you were not shown.
+
+ClientError / method=CLIENT events carry JavaScript stacks from the browser.
+Those stacks are often minified; React componentStack (stack_hint /
+source=boundary) is richer when present. If no Python file maps, still analyze
+from the JS stack + message + route and propose FE/API fixes at a high level.
 
 Rules:
 1. Diagnose the true root cause from the provided source. If the code shown is
    insufficient, say so plainly and set confidence to "low".
-2. Point at specific files and line numbers you were shown.
+2. Point at specific files and line numbers you were shown (Python) or the
+   clearest JS frame / component when this is a browser error.
 3. Propose a concrete fix. Prefer a unified diff against the quoted code. If a
    diff is not appropriate, give the replacement code block.
 4. Severity by user impact: critical (data loss/outage), high (feature broken),
@@ -101,7 +110,10 @@ def build_user_prompt(
         f"error_type: {sample.error_type}\n"
         f"route: {sample.method} {sample.route}\n"
         f"status: {sample.status}\n"
-        f"message: {sample.message}\n\n"
+        f"message: {sample.message}\n"
+        f"source: {sample.source or '-'}\n"
+        f"stack_hint: {sample.stack_hint or '-'}\n"
+        f"user_agent: {(sample.user_agent or '-')[:200]}\n\n"
         f"## Traceback\n{sample.traceback or '(none captured)'}\n\n"
         f"## Repository file index\n{repo_index}\n\n"
         f"## Source code around the traceback frames\n{code_context}\n\n"

@@ -10,7 +10,8 @@ from typing import Any
 # sample the LLM reasons over.
 INSIGHTS_QUERY = """
 fields @timestamp, @logStream, level, logger, message, request_id, route,
-       method, status, error_type, fingerprint, exc_info
+       method, status, error_type, fingerprint, exc_info, stack, source,
+       stack_hint, user_agent
 | filter level = "ERROR"
 | sort @timestamp desc
 | limit {limit}
@@ -31,9 +32,17 @@ class LogEvent:
     fingerprint: str
     request_id: str
     traceback: str
+    source: str = ""
+    stack_hint: str = ""
+    user_agent: str = ""
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> LogEvent:
+        # Backend exceptions put the Python traceback in ``exc_info``. Browser
+        # client-error intake stores a JS stack in ``stack`` (also promoted to
+        # ``exc_info`` by JsonFormatter); accept either so FE failures still
+        # reach MiniMax inside this Lambda.
+        traceback_text = row.get("exc_info") or row.get("stack") or ""
         return cls(
             timestamp=row.get("@timestamp", ""),
             message=row.get("message", ""),
@@ -44,7 +53,10 @@ class LogEvent:
             error_type=row.get("error_type", ""),
             fingerprint=row.get("fingerprint", ""),
             request_id=row.get("request_id", ""),
-            traceback=row.get("exc_info", ""),
+            traceback=traceback_text,
+            source=row.get("source", ""),
+            stack_hint=row.get("stack_hint", ""),
+            user_agent=row.get("user_agent", ""),
         )
 
 

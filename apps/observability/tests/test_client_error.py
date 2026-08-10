@@ -50,7 +50,11 @@ def test_client_error_records_json_error(api: APIClient, caplog: pytest.LogCaptu
     assert res.status_code == status.HTTP_202_ACCEPTED
     assert res.data["detail"] == "recorded"
     assert len(res.data["fingerprint"]) == 16
-    assert any("client_error" in r.message for r in caplog.records)
+    record = next(r for r in caplog.records if "client_error" in r.message)
+    assert getattr(record, "stack", "").startswith("ReferenceError")
+    assert getattr(record, "stack_hint", "") == "fe_stack_may_be_minified"
+    # Formatter promotion is covered separately; ensure full stack is kept (≤8k).
+    assert len(getattr(record, "stack", "")) < 8000
 
 
 @pytest.mark.django_db
@@ -115,3 +119,19 @@ def test_client_error_caps_user_agent_in_log(
         )
     record = next(r for r in caplog.records if "client_error" in r.message)
     assert len(getattr(record, "user_agent", "")) <= 512
+
+
+@pytest.mark.django_db
+def test_client_error_boundary_stack_hint(api: APIClient, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("ERROR", logger="apps.observability"):
+        api.post(
+            reverse("observability-client-error"),
+            {
+                "message": "render boom",
+                "stack": "Error: render boom\nReact componentStack:\n    at Boom",
+                "source": "boundary",
+            },
+            format="json",
+        )
+    record = next(r for r in caplog.records if "client_error" in r.message)
+    assert getattr(record, "stack_hint", "") == "fe_component_stack"

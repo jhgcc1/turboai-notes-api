@@ -71,6 +71,26 @@ def test_formatter_includes_traceback() -> None:
     assert "ValueError: kaboom" in payload["exc_info"]
 
 
+def test_formatter_promotes_client_stack_to_exc_info() -> None:
+    """Browser stacks arrive as ``extra.stack``; triage reads ``exc_info``."""
+    record = _record(logging.ERROR, "client_error boom", stack="Error: x\n    at app.js:1:1")
+    payload = json.loads(JsonFormatter().format(record))
+    assert payload["exc_info"] == "Error: x\n    at app.js:1:1"
+    assert payload["stack"] == "Error: x\n    at app.js:1:1"
+
+
+def test_formatter_prefers_real_exc_info_over_stack() -> None:
+    try:
+        raise RuntimeError("py")
+    except RuntimeError:
+        import sys
+
+        record = _record(logging.ERROR, "failed", stack="js stack")
+        record.exc_info = sys.exc_info()
+    payload = json.loads(JsonFormatter().format(record))
+    assert "RuntimeError: py" in payload["exc_info"]
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
@@ -124,6 +144,41 @@ def test_exception_handler_logs_server_errors_as_error(caplog: pytest.LogCapture
     assert response is None
     assert caplog.records[0].levelno == logging.ERROR
     assert caplog.records[0].exc_info is not None
+
+
+def test_exception_handler_marks_request_error_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Req:
+        pass
+
+    request = Req()
+    with caplog.at_level(logging.ERROR, logger="apps.error"):
+        turbo_exception_handler(RuntimeError("boom"), {"request": request, "view": None})
+    assert getattr(request, "_error_logged", False) is True
+
+
+def test_middleware_process_exception_logs_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from django.http import HttpRequest
+
+    from config.middleware import RequestLoggingMiddleware
+
+    request = HttpRequest()
+    request.path = "/api/notes/"
+    request.method = "GET"
+    request.request_id = "rid-1"  # type: ignore[attr-defined]
+    mw = RequestLoggingMiddleware(get_response=lambda r: None)  # type: ignore[arg-type]
+    with caplog.at_level(logging.ERROR, logger="apps.error"):
+        assert mw.process_exception(request, RuntimeError("uncaught")) is None
+    assert getattr(request, "_error_logged", False) is True
+    assert caplog.records[0].exc_info is not None
+    # Second call is a no-op once flagged.
+    with caplog.at_level(logging.ERROR, logger="apps.error"):
+        before = len(caplog.records)
+        mw.process_exception(request, RuntimeError("again"))
+        assert len(caplog.records) == before
 
 
 def test_exception_handler_reports_404_as_client_error(caplog: pytest.LogCaptureFixture) -> None:

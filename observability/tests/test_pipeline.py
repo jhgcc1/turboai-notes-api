@@ -62,6 +62,24 @@ def test_fetch_error_events_parses_rows() -> None:
     assert events[0].traceback == "Traceback"
 
 
+def test_fetch_error_events_falls_back_to_stack_field() -> None:
+    """FE client-error logs may only have ``stack`` if formatter promotion lags."""
+    rows = [
+        [
+            {"field": "message", "value": "[ERROR] client_error"},
+            {"field": "fingerprint", "value": "fe1"},
+            {"field": "stack", "value": "Error: x\n    at app.js:1"},
+            {"field": "source", "value": "window.onerror"},
+            {"field": "stack_hint", "value": "fe_stack_may_be_minified"},
+        ]
+    ]
+    client = FakeLogsClient(rows, ["Complete"])
+    events = fetch_error_events("lg", 15, 10, client=client, poll_interval=0)
+    assert events[0].traceback.startswith("Error: x")
+    assert events[0].source == "window.onerror"
+    assert events[0].stack_hint == "fe_stack_may_be_minified"
+
+
 def test_fetch_error_events_polls_until_complete() -> None:
     client = FakeLogsClient([], ["Running", "Complete"])
     assert fetch_error_events("lg", 15, 10, client=client, poll_interval=0) == []
