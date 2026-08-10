@@ -212,9 +212,11 @@ latency percentiles, database load, and a live table of recent errors.
    > into a chat window and must be considered compromised. Issue a new one at
    > <https://platform.minimax.io> and never commit a key to this repository.
 
-3. **(Optional) Populate the Jira secret.** The same out-of-band pattern. Only
-   required when `jira_enabled = true` is set on the observability module
-   (it defaults to `false`). The token never enters the state file:
+3. **Populate the Jira secret** (when `jira_enabled = true`). Same out-of-band
+   pattern; the token never enters the state file. Staging is already enabled
+   (`jira_enabled=true`, project `OPS` on `https://joaocavalcanti002.atlassian.net`)
+   with `turboai-notes-staging-jira-credentials` populated — see
+   `docs/process/17-observability-staging-apply.md`.
 
    ```bash
    aws secretsmanager put-secret-value \

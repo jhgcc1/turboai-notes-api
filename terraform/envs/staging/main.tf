@@ -44,13 +44,14 @@ variable "ops_email" {
 variable "jira_enabled" {
   type        = bool
   description = "When true, the triage Lambda creates a Jira issue per first sighting and links it in the email."
-  default     = false
+  # Staging wired 2026-08-10 to joaocavalcanti002.atlassian.net / OPS. Keep true so Deploy CI (no TF_VAR_jira_*) does not tear the secret down.
+  default     = true
 }
 
 variable "jira_project_key" {
   type        = string
   description = "Jira project key (e.g. \"OPS\"). Required when jira_enabled is true."
-  default     = ""
+  default     = "OPS"
 }
 
 variable "jira_issue_type" {
