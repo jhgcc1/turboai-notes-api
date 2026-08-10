@@ -80,7 +80,7 @@ POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    {"Effect":"Allow","Action":["ecr:*","ecs:*","apprunner:*","rds:*","ec2:*","s3:*","cloudfront:*","logs:*","cloudwatch:*","iam:PassRole","iam:GetRole","iam:CreateRole","iam:AttachRolePolicy","iam:PutRolePolicy","iam:TagRole","iam:CreateInstanceProfile","iam:AddRoleToInstanceProfile","iam:GetInstanceProfile","ssm:GetParameter","dynamodb:*","elasticloadbalancing:*"],"Resource":"*"},
+    {"Effect":"Allow","Action":["ecr:*","ecs:*","apprunner:*","rds:*","ec2:*","s3:*","cloudfront:*","logs:*","cloudwatch:*","sns:*","lambda:*","iam:PassRole","iam:GetRole","iam:CreateRole","iam:AttachRolePolicy","iam:PutRolePolicy","iam:TagRole","iam:CreateInstanceProfile","iam:AddRoleToInstanceProfile","iam:GetInstanceProfile","ssm:GetParameter","dynamodb:*","elasticloadbalancing:*"],"Resource":"*"},
     {"Effect":"Allow","Action":["secretsmanager:CreateSecret","secretsmanager:DescribeSecret","secretsmanager:GetSecretValue","secretsmanager:PutSecretValue","secretsmanager:UpdateSecret","secretsmanager:DeleteSecret","secretsmanager:TagResource"],"Resource":"arn:aws:secretsmanager:*:${ACCOUNT_ID}:secret:turboai-notes-*"}
   ]
 }
