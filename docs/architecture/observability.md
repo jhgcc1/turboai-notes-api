@@ -198,6 +198,23 @@ latency percentiles, database load, and a live table of recent errors.
 
 ## Operating it
 
+### Secrets inventory (triage-related)
+
+These live in AWS Secrets Manager (`us-east-2`, account `615737882760`) and are
+**never** GitHub Secrets. Django ECS and the Next.js SPA do not read them.
+Full cross-system inventory (including GitHub, ECS, bastion PEM, MCP `.env`) is
+in the architecture HTML §6.
+
+| Secret name | Staging | Prod | Used by |
+| --- | --- | --- | --- |
+| `turboai-notes-{env}-llm-credentials` | Exists; MiniMax `api_key` populated | Exists; may still be Terraform `REPLACE_ME` until `put-secret-value` | Triage Lambda only (`LLM_SECRET_ID`). JSON: `api_key`, `base_url`, `model`. |
+| `turboai-notes-{env}-jira-credentials` | Exists + populated; `jira_enabled=true` (project `KAN`) | **Not created** — `jira_enabled=false` in `envs/prod` | Triage Lambda only when `JIRA_ENABLED=true`. JSON: `base_url`, `email`, `api_token`. |
+
+ECS still uses separate SM secrets for Django (`…-django-secret-key` →
+`SECRET_KEY`) and Postgres (`…-db-password` → `POSTGRES_PASSWORD`); those are
+fed from GitHub `DJANGO_SECRET_KEY` / `DB_PASSWORD` at Terraform apply time.
+CORS/CSRF origins and similar Lambda knobs are plain env config, not secrets.
+
 ### One-time setup after `terraform apply`
 
 1. **Confirm the email subscription.** Set `ops_email` (via `TF_VAR_ops_email`
