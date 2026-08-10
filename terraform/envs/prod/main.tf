@@ -24,6 +24,13 @@ variable "db_password" { sensitive = true }
 variable "django_secret_key" { sensitive = true }
 variable "image_tag" { default = "latest" }
 
+# Same operator allowlist as staging until prod is applied. Update when the operator public IP changes.
+variable "bastion_ssh_cidr" {
+  type        = list(string)
+  description = "CIDR blocks allowed to SSH to the bastion (port 22)."
+  default     = ["187.123.69.5/32"]
+}
+
 module "stack" {
   source             = "../../modules/stack"
   environment        = "prod"
@@ -32,6 +39,7 @@ module "stack" {
   django_secret_key  = var.django_secret_key
   image_tag          = var.image_tag
   bastion_public_key = trimspace(file("${path.module}/../../bastion.pub"))
+  bastion_ssh_cidr   = var.bastion_ssh_cidr
 }
 
 output "api_url" { value = module.stack.api_url }

@@ -42,6 +42,11 @@ variable "bastion_public_key" {
   description = "OpenSSH public key for bastion SSH. Private key stays operator-local (e.g. ~/turbo-notes-bastion.pem); never commit it."
 }
 
+variable "bastion_ssh_cidr" {
+  type        = list(string)
+  description = "CIDR blocks allowed to SSH (port 22) to the bastion. Prefer operator public IP /32; update env tfvars when the IP changes."
+}
+
 locals {
   name = "${var.project}-${var.environment}"
   tags = {
@@ -125,7 +130,7 @@ resource "aws_security_group" "bastion" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # tighten in real ops
+    cidr_blocks = var.bastion_ssh_cidr
   }
   egress {
     from_port   = 0

@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars for local overrides (*.tfvars is gitignored).
+# Deploy CI uses the default on variable "bastion_ssh_cidr" in main.tf.
+# Discovered 2026-08-09 from WSL: curl https://checkip.amazonaws.com
+bastion_ssh_cidr = ["187.123.69.5/32"]

@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars for local overrides (*.tfvars is gitignored).
+# Keep aligned with staging until a different operator IP is needed.
+bastion_ssh_cidr = ["187.123.69.5/32"]
