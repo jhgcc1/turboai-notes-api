@@ -62,7 +62,10 @@ resource "aws_sns_topic" "reports" {
   tags = local.tags
 }
 
-data "aws_iam_policy_document" "topic_access" {
+# SNS topic policies must name exactly one Resource (the topic itself).
+# Sharing a single document that listed both ARNs fails with:
+# "Policy statement must apply to a single resource!".
+data "aws_iam_policy_document" "alarms_topic_access" {
   statement {
     effect  = "Allow"
     actions = ["SNS:Publish"]
@@ -70,7 +73,24 @@ data "aws_iam_policy_document" "topic_access" {
       type        = "Service"
       identifiers = ["cloudwatch.amazonaws.com"]
     }
-    resources = [aws_sns_topic.alarms.arn, aws_sns_topic.reports.arn]
+    resources = [aws_sns_topic.alarms.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceOwner"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "reports_topic_access" {
+  statement {
+    effect  = "Allow"
+    actions = ["SNS:Publish"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    resources = [aws_sns_topic.reports.arn]
     condition {
       test     = "StringEquals"
       variable = "AWS:SourceOwner"
@@ -81,12 +101,12 @@ data "aws_iam_policy_document" "topic_access" {
 
 resource "aws_sns_topic_policy" "alarms" {
   arn    = aws_sns_topic.alarms.arn
-  policy = data.aws_iam_policy_document.topic_access.json
+  policy = data.aws_iam_policy_document.alarms_topic_access.json
 }
 
 resource "aws_sns_topic_policy" "reports" {
   arn    = aws_sns_topic.reports.arn
-  policy = data.aws_iam_policy_document.topic_access.json
+  policy = data.aws_iam_policy_document.reports_topic_access.json
 }
 
 # AWS emails a confirmation link; delivery only starts once it is clicked.
