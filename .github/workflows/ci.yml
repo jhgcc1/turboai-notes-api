@@ -30,5 +30,8 @@ jobs:
       # which does not resolve from the repository root.
       - name: Mypy
         run: mypy apps config || true
+      # Fail if models changed without a committed migration (SQLite CI DB only).
+      - name: Migrations check
+        run: python manage.py makemigrations --check --dry-run
       - name: Unit tests (100% coverage)
         run: pytest
