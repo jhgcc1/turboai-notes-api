@@ -288,6 +288,50 @@ resource "aws_secretsmanager_secret_version" "llm_placeholder" {
 }
 
 # ---------------------------------------------------------------------------
+# Jira credentials
+#
+# Optional and created only when ``jira_enabled`` is true. Same out-of-band
+# population pattern as the LLM secret: Terraform creates the placeholder
+# with a ``REPLACE_ME`` payload and ``ignore_changes``, the operator
+# writes the real base_url/email/api_token with
+# ``aws secretsmanager put-secret-value``. The Lambda never sees the
+# token in plain text — it resolves the secret at runtime via
+# ``JIRA_SECRET_ID``.
+# ---------------------------------------------------------------------------
+
+resource "aws_secretsmanager_secret" "jira" {
+  count                   = var.jira_enabled ? 1 : 0
+  name                    = "${local.name}-jira-credentials"
+  description             = "Jira Cloud API credentials (base_url, email, api_token) for the error-triage Lambda."
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "jira_placeholder" {
+  count     = var.jira_enabled ? 1 : 0
+  secret_id = aws_secretsmanager_secret.jira[0].id
+  secret_string = jsonencode({
+    base_url  = "https://REPLACE_ME.atlassian.net"
+    email     = "REPLACE_ME@example.com"
+    api_token = "REPLACE_ME"
+  })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# Effective secret id: explicit override wins, otherwise the placeholder
+# ARN. Exposed via ``jira_secret_id`` so the Lambda env var is a
+# single concrete value, and the policy in the IAM block can attach to
+# the same ARN.
+locals {
+  jira_secret_arn = var.jira_enabled ? (
+    var.jira_secret_id_override != "" ? var.jira_secret_id_override : aws_secretsmanager_secret.jira[0].arn
+  ) : ""
+}
+
+# ---------------------------------------------------------------------------
 # Triage Lambda
 # ---------------------------------------------------------------------------
 
@@ -341,6 +385,16 @@ data "aws_iam_policy_document" "triage" {
     resources = [aws_secretsmanager_secret.llm.arn]
   }
 
+  dynamic "statement" {
+    for_each = var.jira_enabled ? [local.jira_secret_arn] : []
+    content {
+      sid       = "ReadJiraSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [statement.value]
+    }
+  }
+
   statement {
     sid       = "PublishReport"
     effect    = "Allow"
@@ -383,24 +437,33 @@ resource "aws_lambda_function" "triage" {
   memory_size = 512
 
   environment {
-    variables = {
-      CW_LOG_GROUP       = var.log_group_name
-      ENVIRONMENT        = var.environment
-      DEDUP_TABLE        = aws_dynamodb_table.dedup.name
-      LLM_SECRET_ID      = aws_secretsmanager_secret.llm.arn
-      LLM_BASE_URL       = var.llm_base_url
-      LLM_MODEL          = var.llm_model
-      SNS_TOPIC_ARN      = aws_sns_topic.reports.arn
-      SES_FROM           = var.ses_from
-      SES_TO             = var.ses_to
-      LOOKBACK_MINUTES   = tostring(var.lookback_minutes)
-      RESEND_EVERY       = tostring(var.resend_every)
-      DEDUP_TTL_HOURS    = tostring(var.dedup_ttl_hours)
-      MAX_EVENTS         = tostring(var.max_events)
-      CODE_WINDOW_LINES  = tostring(var.code_window_lines)
-      CODE_CONTEXT_CHARS = tostring(var.code_context_chars)
-      DRY_RUN            = tostring(var.triage_dry_run)
-    }
+    variables = merge(
+      {
+        CW_LOG_GROUP       = var.log_group_name
+        ENVIRONMENT        = var.environment
+        DEDUP_TABLE        = aws_dynamodb_table.dedup.name
+        LLM_SECRET_ID      = aws_secretsmanager_secret.llm.arn
+        LLM_BASE_URL       = var.llm_base_url
+        LLM_MODEL          = var.llm_model
+        SNS_TOPIC_ARN      = aws_sns_topic.reports.arn
+        SES_FROM           = var.ses_from
+        SES_TO             = var.ses_to
+        LOOKBACK_MINUTES   = tostring(var.lookback_minutes)
+        RESEND_EVERY       = tostring(var.resend_every)
+        DEDUP_TTL_HOURS    = tostring(var.dedup_ttl_hours)
+        MAX_EVENTS         = tostring(var.max_events)
+        CODE_WINDOW_LINES  = tostring(var.code_window_lines)
+        CODE_CONTEXT_CHARS = tostring(var.code_context_chars)
+        DRY_RUN            = tostring(var.triage_dry_run)
+      },
+      var.jira_enabled ? {
+        JIRA_ENABLED     = tostring(var.jira_enabled)
+        JIRA_BASE_URL    = "" # base_url lives in the secret; the Lambda reads it from there
+        JIRA_PROJECT_KEY = var.jira_project_key
+        JIRA_ISSUE_TYPE  = var.jira_issue_type
+        JIRA_SECRET_ID   = local.jira_secret_arn
+      } : {}
+    )
   }
 
   depends_on = [aws_iam_role_policy.triage, aws_cloudwatch_log_group.triage]

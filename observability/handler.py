@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-from triage import dedup, repo
+from triage import dedup, jira, repo
 from triage.llm import analyze
 from triage.logs import fetch_error_events, group_by_fingerprint
 from triage.notify import build_report, send_report
@@ -107,6 +107,23 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
         code_context=repo.render_context(excerpts),
     )
 
+    issue_key = record.issue_key
+    if issue_key is None and settings.jira_enabled:
+        issue_key = jira.create_issue(
+            settings,
+            analysis,
+            source_logs=[event.__dict__ for event in group.events],
+        )
+        if issue_key:
+            # Persist the key so the next occurrence of this fingerprint
+            # becomes a "comment on existing" rather than a fresh ticket.
+            dedup.attach_issue(
+                settings.dedup_table,
+                group.fingerprint,
+                issue_key,
+            )
+    issue_browse_url = jira.browse_url(settings.jira_base_url, issue_key) if issue_key else None
+
     report = build_report(
         analysis,
         group,
@@ -117,6 +134,8 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
         lookback_minutes=settings.lookback_minutes,
         occurrences=record.occurrences,
         is_recurrence=not record.is_new,
+        issue_key=issue_key,
+        issue_browse_url=issue_browse_url,
     )
 
     if settings.dry_run:
@@ -127,6 +146,7 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
             "action": "dry-run",
             "severity": analysis.severity,
             "subject": report.subject,
+            "issue_key": issue_key,
         }
 
     channel = send_report(
@@ -143,6 +163,7 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
         "severity": analysis.severity,
         "occurrences": record.occurrences,
         "files_inspected": [excerpt.path for excerpt in excerpts],
+        "issue_key": issue_key,
     }
 
 

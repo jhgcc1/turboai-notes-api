@@ -136,6 +136,30 @@ variable "triage_dry_run" {
   default     = false
 }
 
+variable "jira_enabled" {
+  type        = bool
+  description = "When true, the triage Lambda creates a Jira issue for every first sighting of a fingerprint and links it in the email. The actual credentials live in a separate Secrets Manager secret populated out of band."
+  default     = false
+}
+
+variable "jira_project_key" {
+  type        = string
+  description = "Jira project key (e.g. \"OPS\") the Lambda files issues under. Required when jira_enabled is true; ignored otherwise."
+  default     = ""
+}
+
+variable "jira_issue_type" {
+  type        = string
+  description = "Jira issue type name (e.g. \"Bug\", \"Task\"). Created issues use this type."
+  default     = "Bug"
+}
+
+variable "jira_secret_id_override" {
+  type        = string
+  description = "Optional explicit Secrets Manager secret id (name or ARN) holding the Jira credentials. When empty, the module generates a placeholder secret named after the project / environment. The Lambda reads it with secretsmanager:GetSecretValue."
+  default     = ""
+}
+
 variable "lambda_log_retention_days" {
   type    = number
   default = 14

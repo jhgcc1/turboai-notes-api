@@ -67,6 +67,11 @@ class Analysis:
     confidence: str = "low"
     model: str = ""
     degraded: bool = False
+    # Optional labels (e.g. "app-errors", "fingerprint-bucket"). The Jira
+    # integration is the only consumer today; keeping the field here means
+    # we don't have to plumb labels through the call sites if other
+    # downstreams want them later.
+    labels: list[str] = field(default_factory=list)
 
 
 def build_user_prompt(

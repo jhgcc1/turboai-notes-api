@@ -1,8 +1,9 @@
 """Environment and secret resolution for the triage Lambda.
 
-The MiniMax key lives in Secrets Manager, never in the function's environment:
+The LLM key lives in Secrets Manager, never in the function's environment:
 Lambda env vars are readable by anyone holding
-``lambda:GetFunctionConfiguration``.
+``lambda:GetFunctionConfiguration``. Jira credentials are resolved the
+same way — a separate secret, never an env var.
 """
 
 from __future__ import annotations
@@ -23,6 +24,12 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(f"missing required environment variable: {name}")
     return value
+
+
+def _require_when(predicate: bool, name: str) -> str:
+    if not predicate:
+        return ""
+    return _require(name)
 
 
 def _flag(name: str, default: str = "false") -> bool:
@@ -64,9 +71,18 @@ class Settings:
     code_context_chars: int
     code_window_lines: int
     dry_run: bool
+    jira_enabled: bool
+    jira_base_url: str
+    jira_project_key: str
+    jira_issue_type: str
+    jira_secret_id: str
 
     @classmethod
     def from_env(cls) -> Settings:
+        jira_enabled = _flag("JIRA_ENABLED")
+        jira_base_url = _require_when(jira_enabled, "JIRA_BASE_URL")
+        jira_project_key = _require_when(jira_enabled, "JIRA_PROJECT_KEY")
+        jira_secret_id = _require_when(jira_enabled, "JIRA_SECRET_ID")
         return cls(
             log_group=_require("CW_LOG_GROUP"),
             environment=os.getenv("ENVIRONMENT", "staging"),
@@ -88,4 +104,9 @@ class Settings:
             code_context_chars=int(os.getenv("CODE_CONTEXT_CHARS", "24000")),
             code_window_lines=int(os.getenv("CODE_WINDOW_LINES", "40")),
             dry_run=_flag("DRY_RUN"),
+            jira_enabled=jira_enabled,
+            jira_base_url=jira_base_url,
+            jira_project_key=jira_project_key,
+            jira_issue_type=os.getenv("JIRA_ISSUE_TYPE", "Bug").strip() or "Bug",
+            jira_secret_id=jira_secret_id,
         )

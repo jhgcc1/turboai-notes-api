@@ -37,6 +37,28 @@ variable "ops_email" {
   default     = ""
 }
 
+# Optional Jira wiring. Disabled by default; flip jira_enabled to true and set
+# jira_project_key (e.g. "BACK") to start creating tickets. The credentials
+# themselves live in Secrets Manager and are populated out of band — see
+# docs/architecture/observability.md for the put-secret-value command.
+variable "jira_enabled" {
+  type        = bool
+  description = "When true, the triage Lambda creates a Jira issue per first sighting and links it in the email."
+  default     = false
+}
+
+variable "jira_project_key" {
+  type        = string
+  description = "Jira project key (e.g. \"BACK\"). Required when jira_enabled is true."
+  default     = ""
+}
+
+variable "jira_issue_type" {
+  type        = string
+  description = "Jira issue type name (defaults to \"Bug\")."
+  default     = "Bug"
+}
+
 module "stack" {
   source             = "../../modules/stack"
   environment        = "prod"
@@ -61,6 +83,9 @@ module "observability" {
   ecs_service_name        = module.stack.ecs_service_name
   db_instance_id          = module.stack.rds_instance_id
   ops_email               = var.ops_email
+  jira_enabled            = var.jira_enabled
+  jira_project_key        = var.jira_project_key
+  jira_issue_type         = var.jira_issue_type
   # Prod pages on the first sustained burst rather than waiting for a spike.
   error_alarm_threshold = 3
   alb_5xx_threshold     = 5
@@ -80,6 +105,7 @@ output "alarms_topic_arn" { value = module.observability.alarms_topic_arn }
 output "reports_topic_arn" { value = module.observability.reports_topic_arn }
 output "triage_function_name" { value = module.observability.triage_function_name }
 output "llm_secret_arn" { value = module.observability.llm_secret_arn }
+output "jira_secret_arn" { value = module.observability.jira_secret_arn }
 output "observability_dashboard" { value = module.observability.dashboard_name }
 output "ecs_cluster_name" { value = module.stack.ecs_cluster_name }
 output "ecs_service_name" { value = module.stack.ecs_service_name }

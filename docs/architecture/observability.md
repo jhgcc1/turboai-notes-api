@@ -151,9 +151,9 @@ The pipeline is built so a report always goes out:
 
 | Alarm | Metric | Default threshold | Routes to |
 | --- | --- | --- | --- |
-| `-app-errors` | `AppErrorCount` (log filter) | >= 5 / 5 min (prod: 3) | triage Lambda |
-| `-5xx` | `HTTPCode_Target_5XX_Count` | > 10 / 5 min (prod: 5) | triage Lambda |
-| `-latency-p95` | `TargetResponseTime` p95 | > 2 s for 2 periods | triage Lambda |
+| `-app-errors` | `AppErrorCount` (log filter) | >= 5 / 5 min (prod: 3) | triage Lambda → email (+ Jira, when `JIRA_ENABLED=true`) |
+| `-5xx` | `HTTPCode_Target_5XX_Count` | > 10 / 5 min (prod: 5) | triage Lambda → email (+ Jira, when `JIRA_ENABLED=true`) |
+| `-latency-p95` | `TargetResponseTime` p95 | > 2 s for 2 periods | triage Lambda → email |
 | `-no-healthy-hosts` | `HealthyHostCount` | < 1 for 3 min | email |
 | `-rds-cpu` | RDS `CPUUtilization` | > 85% for 15 min | email |
 | `-rds-free-storage` | RDS `FreeStorageSpace` | < 2 GiB | email |
@@ -187,6 +187,20 @@ latency percentiles, database load, and a live table of recent errors.
    > into a chat window and must be considered compromised. Issue a new one at
    > <https://platform.minimax.io> and never commit a key to this repository.
 
+3. **(Optional) Populate the Jira secret.** The same out-of-band pattern. Only
+   required when `jira_enabled = true` is set on the observability module
+   (it defaults to `false`). The token never enters the state file:
+
+   ```bash
+   aws secretsmanager put-secret-value \
+     --secret-id "$(terraform output -raw jira_secret_arn)" \
+     --secret-string '{
+       "base_url":  "https://your-site.atlassian.net",
+       "email":     "ops@example.com",
+       "api_token": "ATATT3xFfGF0...your token here..."
+     }'
+   ```
+
 ### Verifying it end to end
 
 Invoke the function directly; it treats a bare payload as an alarm:
@@ -215,6 +229,10 @@ operators can adjust them per environment without touching code:
 | `CODE_WINDOW_LINES` | 40 | Lines of context fetched above and below each traceback frame. |
 | `CODE_CONTEXT_CHARS` | 24000 | Hard cap on the total size of source code shipped to the LLM. |
 | `LLM_MODEL` | `MiniMax-M2.1` | Model id used for analysis. |
+| `JIRA_ENABLED` | `false` | When `true`, the Lambda creates a Jira issue for the first sighting of a fingerprint and links the ticket in the email. Disabled envs never touch the Jira API. |
+| `JIRA_BASE_URL` | (empty) | Reserved for the future — the actual base URL is read from the secret so it never sits in `lambda:GetFunctionConfiguration`. Must remain empty. |
+| `JIRA_PROJECT_KEY` | (empty) | Jira project key (e.g. `OPS`, `BACK`). Required when `JIRA_ENABLED=true`. |
+| `JIRA_ISSUE_TYPE` | `Bug` | Jira issue type created by the Lambda (`Task`, `Story`, `Incident` all work). |
 | `DRY_RUN` | `false` | When `true`, run the full pipeline but write the report to logs instead of sending email. |
 
 ### Cost
@@ -225,17 +243,74 @@ on-demand, and SNS email is free up to 1,000 notifications. The variable cost
 is the LLM call, roughly a few cents per distinct error thanks to
 fingerprint deduplication.
 
-## Adding Jira later
+## Jira
 
-Ticket creation was dropped because the Atlassian account has no Jira site
-("Supported sites required" during OAuth). The pieces that make it easy to add
-are already in place: a stable fingerprint, a DynamoDB record to store the
-issue key against, and a structured `Analysis` object.
+The Lambda can optionally create a Jira Cloud issue for the **first** sighting
+of a fingerprint, and the email that goes out always links to the ticket. The
+path:
 
-To wire it up, create a free Jira Cloud site and a project, add a Secrets
-Manager secret holding `base_url`, `email` and `api_token`, then post the
-analysis to `POST /rest/api/3/issue` (the description field takes Atlassian
-Document Format, not markdown) from a new branch in
-`handler.process_alarm` next to `send_report`. Use `dedup.attach_issue` to
-record the returned key so recurrences comment on the existing ticket instead
-of opening a new one.
+```
+analyse -> create_issue (POST /rest/api/3/issue) -> dedup.attach_issue
+   -> build_report(subject=[OPS-42] ..., body "Jira: https://.../browse/OPS-42")
+   -> SNS / SES
+```
+
+The next time the same fingerprint shows up, the `issue_key` already lives in
+the DynamoDB record so the Lambda skips the create call and the email starts
+with `Existing ticket: OPS-42` (or, when the operator simply files the
+follow-up under the existing key, the report body points to the same URL).
+This is the "comment on existing ticket" behaviour described in the design
+notes — there is no separate `POST .../comment` today, the email is the
+follow-up channel.
+
+The Jira call is best-effort: a transport error, 4xx/5xx, malformed secret
+or disabled env all collapse to `issue_key = None` and the email is still
+sent. The whole Jira branch is wrapped so a broken integration cannot block
+the alarm-to-email path.
+
+### Variables and credentials
+
+| Terraform variable | Lambda env var | Default | Required when `JIRA_ENABLED=true`? |
+| --- | --- | --- | --- |
+| `jira_enabled` | `JIRA_ENABLED` | `false` | — |
+| `jira_project_key` | `JIRA_PROJECT_KEY` | empty | yes |
+| `jira_issue_type` | `JIRA_ISSUE_TYPE` | `Bug` | no |
+| `jira_secret_id_override` | `JIRA_SECRET_ID` | (uses module-created secret) | optional |
+
+The email, the API token and the base URL **never** enter Terraform, the
+state file, or the Lambda environment. The module creates a Secrets Manager
+placeholder named `turboai-notes-{env}-jira-credentials` with `ignore_changes`
+on `secret_string` — the same out-of-band pattern as the LLM secret. The
+operator populates it once with `aws secretsmanager put-secret-value`:
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform output -raw jira_secret_arn)" \
+  --secret-string '{
+    "base_url":  "https://your-site.atlassian.net",
+    "email":     "ops@example.com",
+    "api_token": "ATATT3xFfGF0...your token here..."
+  }'
+```
+
+The Lambda reads it via `secretsmanager:GetSecretValue` (the role gets a
+statement scoped to the specific ARN when `jira_enabled` is true) and
+caches the result for the life of the container — same pattern as
+`LLM_SECRET_ID`. The HTTP Basic auth header is built per request and is
+never logged.
+
+### Format of the issue
+
+- **Project**: from `JIRA_PROJECT_KEY`.
+- **Issue type**: from `JIRA_ISSUE_TYPE`, default `Bug`.
+- **Summary**: `[{SEVERITY}] {analysis.summary}` (truncated to 255 chars).
+- **Labels**: `analysis.labels`, de-duplicated and capped at 10.
+- **Description**: Atlassian Document Format (ADF), **not** markdown.
+  `Root cause`, `Suspected locations`, `Fix steps`, `Reproduction` and
+  the proposed patch (as a `diff` code block) are emitted as ADF
+  paragraphs / headings / bullet lists. The self-link to the ticket is
+  rendered as an ADF link node, not as a URL string.
+
+The `self` field can only be filled in **after** the create call returns
+the key, so the description is sent without the link and the email is
+what carries it.

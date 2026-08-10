@@ -28,6 +28,8 @@ _TRACEBACK_LIMIT = 3000
 class Report:
     subject: str
     body: str
+    issue_key: str | None = None
+    issue_browse_url: str | None = None
 
 
 def _bullets(items: list[str], empty: str = "  (none provided)") -> str:
@@ -45,16 +47,27 @@ def build_report(
     lookback_minutes: int,
     occurrences: int,
     is_recurrence: bool,
+    issue_key: str | None = None,
+    issue_browse_url: str | None = None,
 ) -> Report:
     sample = group.representative
     prefix = "RECURRING" if is_recurrence else "NEW"
-    subject = (f"[{environment}] {prefix} {analysis.severity.upper()}: {analysis.summary}")[
-        :_SNS_SUBJECT_LIMIT
-    ]
+    # When the fingerprint already has a Jira ticket we say so in the
+    # subject itself; new issues get the key appended after creation.
+    subject_source = f"[{environment}] {prefix} {analysis.severity.upper()}: {analysis.summary}"
+    if issue_key:
+        subject_source = f"[{issue_key}] {subject_source}"
+    subject = subject_source[:_SNS_SUBJECT_LIMIT]
 
     files_inspected = (
         ", ".join(f"{excerpt.path}:{excerpt.start_line}-{excerpt.end_line}" for excerpt in excerpts)
         or "(none resolved)"
+    )
+
+    ticket_line = (
+        f"Jira            : {issue_browse_url or issue_key}"
+        if issue_key
+        else "Jira            : (not created)"
     )
 
     sections = [
@@ -72,6 +85,7 @@ def build_report(
         f"Log group        : {log_group}",
         f"Sample request id: {sample.request_id or '(none)'}",
         f"Analysed by      : {analysis.model or '(no model)'}",
+        ticket_line,
         "",
         "-" * 60,
         "ROOT CAUSE",
@@ -119,7 +133,12 @@ def build_report(
             "NOTE: the LLM call failed or returned an unusable response; "
             "this report contains raw log data only.\n",
         )
-    return Report(subject=subject, body="\n".join(sections))
+    return Report(
+        subject=subject,
+        body="\n".join(sections),
+        issue_key=issue_key,
+        issue_browse_url=issue_browse_url,
+    )
 
 
 def _send_ses(report: Report, sender: str, recipients: list[str], client: Any) -> bool:

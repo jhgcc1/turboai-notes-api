@@ -285,6 +285,11 @@ def _settings(**overrides: Any) -> Settings:
         "code_context_chars": 24000,
         "code_window_lines": 40,
         "dry_run": False,
+        "jira_enabled": False,
+        "jira_base_url": "",
+        "jira_project_key": "",
+        "jira_issue_type": "Bug",
+        "jira_secret_id": "",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -335,6 +340,113 @@ def test_process_alarm_suppresses_repeat(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     result = handler_module.process_alarm({"AlarmName": "a"}, _settings())
     assert result["action"] == "suppressed"
+
+
+def test_process_alarm_creates_jira_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=True, occurrences=1, issue_key=None),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+    monkeypatch.setattr(handler_module.jira, "create_issue", lambda *a, **k: "OPS-7")
+    attached: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "attach_issue",
+        lambda table, fp, key, **kwargs: attached.append((table, fp, key)),
+    )
+    sent: dict[str, Any] = {}
+
+    def fake_send(report: notify.Report, **kwargs: Any) -> str:
+        sent["subject"] = report.subject
+        sent["issue_key"] = report.issue_key
+        sent["issue_browse_url"] = report.issue_browse_url
+        return "sns"
+
+    monkeypatch.setattr(handler_module, "send_report", fake_send)
+    settings = _settings(
+        jira_enabled=True,
+        jira_base_url="https://acme.atlassian.net",
+        jira_project_key="OPS",
+        jira_issue_type="Bug",
+        jira_secret_id="secret-id",
+    )
+    result = handler_module.process_alarm({"AlarmName": "a"}, settings)
+    assert result["action"] == "notified"
+    assert result["issue_key"] == "OPS-7"
+    assert attached == [(settings.dedup_table, "fp1", "OPS-7")]
+    assert "[OPS-7]" in sent["subject"]
+    assert sent["issue_browse_url"] == "https://acme.atlassian.net/browse/OPS-7"
+
+
+def test_process_alarm_uses_existing_issue_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the dedup record already has a key, no new Jira call is made."""
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=False, occurrences=10, issue_key="OPS-1"),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+
+    def must_not_run(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("Jira create_issue must not be called when an existing key is present")
+
+    monkeypatch.setattr(handler_module.jira, "create_issue", must_not_run)
+    sent: dict[str, Any] = {}
+
+    def fake_send(report: notify.Report, **kwargs: Any) -> str:
+        sent["issue_key"] = report.issue_key
+        return "sns"
+
+    monkeypatch.setattr(handler_module, "send_report", fake_send)
+    settings = _settings(
+        jira_enabled=True,
+        jira_base_url="https://acme.atlassian.net",
+        jira_project_key="OPS",
+        jira_issue_type="Bug",
+        jira_secret_id="secret-id",
+    )
+    result = handler_module.process_alarm({"AlarmName": "a"}, settings)
+    assert result["action"] == "notified"
+    assert sent["issue_key"] == "OPS-1"
+    assert result["issue_key"] == "OPS-1"
+
+
+def test_process_alarm_continues_when_jira_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jira failures must not block the email."""
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=True, occurrences=1, issue_key=None),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+    monkeypatch.setattr(handler_module.jira, "create_issue", lambda *a, **k: None)
+    sent: dict[str, Any] = {}
+
+    def fake_send(report: notify.Report, **kwargs: Any) -> str:
+        sent["subject"] = report.subject
+        sent["issue_key"] = report.issue_key
+        return "sns"
+
+    monkeypatch.setattr(handler_module, "send_report", fake_send)
+    settings = _settings(
+        jira_enabled=True,
+        jira_base_url="https://acme.atlassian.net",
+        jira_project_key="OPS",
+        jira_issue_type="Bug",
+        jira_secret_id="secret-id",
+    )
+    result = handler_module.process_alarm({"AlarmName": "a"}, settings)
+    assert result["action"] == "notified"
+    assert result["issue_key"] is None
+    assert sent["issue_key"] is None
 
 
 def test_process_alarm_dry_run_skips_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
