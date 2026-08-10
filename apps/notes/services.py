@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.contrib.auth.models import AbstractBaseUser
+from django.contrib.auth.models import User
 
 from apps.notes.models import Category
 
@@ -13,7 +13,7 @@ DEFAULT_CATEGORIES: list[tuple[str, str]] = [
 ]
 
 
-def ensure_default_categories(user: AbstractBaseUser) -> list[Category]:
+def ensure_default_categories(user: User) -> list[Category]:
     created: list[Category] = []
     for name, color in DEFAULT_CATEGORIES:
         obj, was_created = Category.objects.get_or_create(

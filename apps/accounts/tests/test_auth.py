@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth.models import User
 from django.urls import reverse
+from pytest_django.fixtures import Settings as DjangoTestSettings
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,7 +17,7 @@ def api() -> APIClient:
 
 
 @pytest.fixture
-def user(db) -> User:
+def user(db: None) -> User:
     return User.objects.create_user(
         username="friend@example.com",
         email="friend@example.com",
@@ -35,7 +36,24 @@ def test_health(api: APIClient) -> None:
 def test_csrf_sets_cookie(api: APIClient) -> None:
     res = api.get(reverse("auth-csrf"))
     assert res.status_code == status.HTTP_200_OK
-    assert "csrftoken" in res.cookies or res.data["detail"]
+    assert "csrftoken" in res.cookies
+    assert res.data["detail"]
+    # Body token is Django's masked value for X-CSRFToken; cookie holds the secret.
+    assert res.data["csrfToken"]
+    assert isinstance(res.data["csrfToken"], str)
+
+
+@pytest.mark.django_db
+def test_csrf_cookie_samesite_follows_cookie_samesite(
+    settings: DjangoTestSettings, api: APIClient
+) -> None:
+    """Cross-origin staging needs SameSite=None on csrftoken, not Django's Lax default."""
+    settings.COOKIE_SAMESITE = "None"
+    settings.CSRF_COOKIE_SAMESITE = "None"
+    settings.CSRF_COOKIE_SECURE = True
+    res = api.get(reverse("auth-csrf"))
+    assert res.status_code == status.HTTP_200_OK
+    assert res.cookies["csrftoken"]["samesite"] == "None"
 
 
 @pytest.mark.django_db
@@ -200,7 +218,40 @@ def test_cookie_jwt_auth_and_bearer(api: APIClient, user: User) -> None:
 
 
 @pytest.mark.django_db
-def test_set_clear_cookies_with_domain(settings, api: APIClient) -> None:
+def test_cookie_auth_enforces_csrf(user: User) -> None:
+    """Cookie-authenticated mutations must carry a valid CSRF token.
+
+    Regression test for the security audit finding that ``APIView``'s
+    implicit ``csrf_exempt`` left every cookie-authenticated write endpoint
+    forgeable cross-site (see apps.accounts.authentication.CookieJWTAuthentication).
+    """
+    strict = APIClient(enforce_csrf_checks=True)
+    refresh = RefreshToken.for_user(user)
+    strict.cookies["access_token"] = str(refresh.access_token)
+
+    denied = strict.post(reverse("auth-logout"), format="json")
+    assert denied.status_code == status.HTTP_403_FORBIDDEN
+
+    csrf_res = strict.get(reverse("auth-csrf"))
+    # Prefer the body token (what the SPA sends cross-origin); cookie secret also works.
+    token = csrf_res.data["csrfToken"]
+    ok = strict.post(reverse("auth-logout"), format="json", HTTP_X_CSRFTOKEN=token)
+    assert ok.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_bearer_auth_exempt_from_csrf(user: User) -> None:
+    """Authorization-header (bearer) auth is not cookie-based, so a mutating
+    request needs no CSRF token — unlike the cookie-auth path above."""
+    strict = APIClient(enforce_csrf_checks=True)
+    refresh = RefreshToken.for_user(user)
+    strict.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+    res = strict.post(reverse("auth-logout"), format="json")
+    assert res.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_set_clear_cookies_with_domain(settings: DjangoTestSettings, api: APIClient) -> None:
     from django.http import HttpResponse
 
     from apps.accounts.cookies import clear_auth_cookies, set_auth_cookies

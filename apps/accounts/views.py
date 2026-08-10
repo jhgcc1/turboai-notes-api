@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as django_login
+from django.contrib.auth.models import User
+from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
+from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -19,6 +24,14 @@ from apps.accounts.cookies import clear_auth_cookies, set_auth_cookies
 from apps.accounts.serializers import LoginSerializer, RegisterSerializer, UserSerializer
 from apps.notes.services import ensure_default_categories
 
+NoAuth: list[type[BaseAuthentication]] = []
+
+
+def _refresh_from_body(request: Request) -> str | None:
+    """Read ``refresh`` from the JSON body, tolerating non-dict payloads."""
+    data: Any = request.data
+    return data.get("refresh") if isinstance(data, dict) else None
+
 
 class AuthThrottle(AnonRateThrottle):
     scope = "auth"
@@ -26,7 +39,7 @@ class AuthThrottle(AnonRateThrottle):
 
 class HealthView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes = NoAuth
 
     def get(self, request: Request) -> Response:
         return Response({"status": "ok"})
@@ -35,15 +48,17 @@ class HealthView(APIView):
 @method_decorator(ensure_csrf_cookie, name="dispatch")
 class CsrfView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes = NoAuth
 
     def get(self, request: Request) -> Response:
-        return Response({"detail": "CSRF cookie set"})
+        # Return the token in the body too: the SPA cannot read a cross-origin
+        # csrftoken cookie via document.cookie (frontend CF ≠ API CF).
+        return Response({"detail": "CSRF cookie set", "csrfToken": get_token(request)})
 
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes = NoAuth
     throttle_classes = [AuthThrottle]
 
     def post(self, request: Request) -> Response:
@@ -58,7 +73,7 @@ class RegisterView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes = NoAuth
     throttle_classes = [AuthThrottle]
 
     def post(self, request: Request) -> Response:
@@ -76,10 +91,10 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request: Request) -> Response:
-        raw = request.COOKIES.get("refresh_token") or request.data.get("refresh")
+        raw = request.COOKIES.get("refresh_token") or _refresh_from_body(request)
         if raw:
             try:
-                token = RefreshToken(raw)
+                token = RefreshToken(raw)  # type: ignore[arg-type]
                 token.blacklist()
             except (TokenError, InvalidToken, AttributeError):
                 pass
@@ -89,18 +104,18 @@ class LogoutView(APIView):
 
 class RefreshView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes = NoAuth
     throttle_classes = [AuthThrottle]
 
     def post(self, request: Request) -> Response:
-        raw = request.COOKIES.get("refresh_token") or request.data.get("refresh")
+        raw = request.COOKIES.get("refresh_token") or _refresh_from_body(request)
         if not raw:
             return Response(
                 {"detail": "Refresh token missing"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         try:
-            old = RefreshToken(raw)
+            old = RefreshToken(raw)  # type: ignore[arg-type]
             user_id = old["user_id"]
             old.blacklist()
             user = get_user_model().objects.get(pk=user_id)
@@ -119,4 +134,5 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
-        return Response(UserSerializer(request.user).data)
+        user = cast(User, request.user)
+        return Response(UserSerializer(user).data)

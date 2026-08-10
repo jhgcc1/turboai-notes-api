@@ -13,7 +13,11 @@ dist/
 build/
 *.sqlite3
 .DS_Store
+staticfiles/
 terraform/.terraform/
+terraform/**/.terraform/
+terraform/**/.terraform.lock.hcl
+terraform/**/tfplan*
 terraform/**/*.tfstate*
 terraform/**/*.tfvars
 !terraform/**/*.tfvars.example
@@ -22,3 +26,4 @@ mcp/logs/
 *.pem
 .idea/
 .vscode/
+.secrets.local

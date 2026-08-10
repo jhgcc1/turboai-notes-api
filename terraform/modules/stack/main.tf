@@ -9,7 +9,7 @@ variable "environment" {
 
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "us-east-2"
 }
 
 variable "db_username" {
@@ -35,6 +35,16 @@ variable "image_tag" {
 variable "frontend_bucket_force_destroy" {
   type    = bool
   default = true
+}
+
+variable "bastion_public_key" {
+  type        = string
+  description = "OpenSSH public key for bastion SSH. Private key stays operator-local (e.g. ~/turbo-notes-bastion.pem); never commit it."
+}
+
+variable "bastion_ssh_cidr" {
+  type        = list(string)
+  description = "CIDR blocks allowed to SSH (port 22) to the bastion. Prefer operator public IP /32; update env tfvars when the IP changes."
 }
 
 locals {
@@ -102,7 +112,7 @@ resource "aws_security_group" "db" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.apprunner_connector.id, aws_security_group.bastion.id]
+    security_groups = [aws_security_group.ecs_tasks.id, aws_security_group.bastion.id]
   }
   egress {
     from_port   = 0
@@ -120,7 +130,7 @@ resource "aws_security_group" "bastion" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # tighten in real ops
+    cidr_blocks = var.bastion_ssh_cidr
   }
   egress {
     from_port   = 0
@@ -131,9 +141,33 @@ resource "aws_security_group" "bastion" {
   tags = local.tags
 }
 
-resource "aws_security_group" "apprunner_connector" {
-  name   = "${local.name}-apprunner"
+resource "aws_security_group" "alb" {
+  name   = "${local.name}-alb"
   vpc_id = aws_vpc.main.id
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = local.tags
+}
+
+resource "aws_security_group" "ecs_tasks" {
+  name   = "${local.name}-ecs"
+  vpc_id = aws_vpc.main.id
+  ingress {
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
   egress {
     from_port   = 0
     to_port     = 0
@@ -182,27 +216,102 @@ resource "aws_iam_role" "bastion" {
   tags = local.tags
 }
 
+resource "aws_iam_role_policy_attachment" "bastion_ssm" {
+  role       = aws_iam_role.bastion.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_instance_profile" "bastion" {
   name = "${local.name}-bastion"
   role = aws_iam_role.bastion.name
 }
 
+resource "aws_key_pair" "bastion" {
+  key_name   = "${local.name}-bastion"
+  public_key = var.bastion_public_key
+  tags       = local.tags
+}
+
 resource "aws_instance" "bastion" {
-  ami                         = data.aws_ssm_parameter.al2023.value
-  instance_type               = "t4g.nano"
+  ami = data.aws_ssm_parameter.al2023.value
+  # Free-tier eligible on this account (t4g.nano is not).
+  instance_type               = "t4g.micro"
   subnet_id                   = aws_subnet.public[0].id
   vpc_security_group_ids      = [aws_security_group.bastion.id]
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.bastion.name
-  user_data                   = <<-EOF
+  key_name                    = aws_key_pair.bastion.key_name
+  user_data_replace_on_change = true
+
+  # IMDSv2 required; hop limit 2 is enough for host SSM agent.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+    instance_metadata_tags      = "disabled"
+  }
+
+  # Wait for IMDS instance-profile credentials, then restart SSM agent.
+  # Prior staging bastion stayed notconnected because the agent started before
+  # credentials were available and never recovered (console: "unable to acquire credentials").
+  user_data = <<-EOF
     #!/bin/bash
+    set -euxo pipefail
+    TOKEN=""
+    ROLE=""
+    for i in $(seq 1 90); do
+      TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
+      if [ -n "$TOKEN" ]; then
+        ROLE=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
+          http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true)
+        if [ -n "$ROLE" ]; then
+          CREDS=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE" || true)
+          if echo "$CREDS" | grep -q AccessKeyId; then
+            break
+          fi
+        fi
+      fi
+      sleep 2
+    done
+    systemctl enable amazon-ssm-agent || true
+    systemctl restart amazon-ssm-agent || true
     dnf install -y postgresql15
   EOF
+
+  depends_on = [
+    aws_iam_role_policy_attachment.bastion_ssm,
+    aws_iam_instance_profile.bastion,
+  ]
+
   tags = merge(local.tags, { Name = "${local.name}-bastion" })
 }
 
 data "aws_ssm_parameter" "al2023" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+}
+
+resource "aws_secretsmanager_secret" "django_secret_key" {
+  name                    = "${local.name}-django-secret-key"
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "django_secret_key" {
+  secret_id     = aws_secretsmanager_secret.django_secret_key.id
+  secret_string = var.django_secret_key
+}
+
+resource "aws_secretsmanager_secret" "db_password" {
+  name                    = "${local.name}-db-password"
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = var.db_password
 }
 
 resource "aws_ecr_repository" "api" {
@@ -218,40 +327,60 @@ resource "aws_cloudwatch_log_group" "api" {
   tags              = local.tags
 }
 
-resource "aws_iam_role" "apprunner_ecr" {
-  name = "${local.name}-apprunner-ecr"
+# App Runner is closed to new customers (2026-04-30). API runs on ECS Fargate + ALB,
+# with CloudFront in front for HTTPS (default cert) without a custom domain.
+resource "aws_iam_role" "ecs_execution" {
+  name = "${local.name}-ecs-exec"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Service = "build.apprunner.amazonaws.com" }
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
       Action    = "sts:AssumeRole"
     }]
   })
   tags = local.tags
 }
 
-resource "aws_iam_role_policy_attachment" "apprunner_ecr" {
-  role       = aws_iam_role.apprunner_ecr.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
+resource "aws_iam_role_policy_attachment" "ecs_execution" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-resource "aws_iam_role" "apprunner_instance" {
-  name = "${local.name}-apprunner-instance"
+# AmazonECSTaskExecutionRolePolicy does not grant Secrets Manager read; task
+# startup needs this to resolve `secrets:` (valueFrom) entries below.
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  name = "${local.name}-ecs-exec-secrets"
+  role = aws_iam_role.ecs_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_secretsmanager_secret.django_secret_key.arn,
+        aws_secretsmanager_secret.db_password.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role" "ecs_task" {
+  name = "${local.name}-ecs-task"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Service = "tasks.apprunner.amazonaws.com" }
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
       Action    = "sts:AssumeRole"
     }]
   })
   tags = local.tags
 }
 
-resource "aws_iam_role_policy" "apprunner_logs" {
-  name = "${local.name}-logs"
-  role = aws_iam_role.apprunner_instance.id
+resource "aws_iam_role_policy" "ecs_task_logs" {
+  name = "${local.name}-ecs-logs"
+  role = aws_iam_role.ecs_task.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -262,64 +391,153 @@ resource "aws_iam_role_policy" "apprunner_logs" {
   })
 }
 
-resource "aws_apprunner_vpc_connector" "connector" {
-  vpc_connector_name = "${local.name}-connector"
-  subnets            = aws_subnet.private[*].id
-  security_groups    = [aws_security_group.apprunner_connector.id]
+resource "aws_lb" "api" {
+  name               = "${local.name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = aws_subnet.public[*].id
   tags               = local.tags
 }
 
-resource "aws_apprunner_service" "api" {
-  service_name = local.name
-  source_configuration {
-    authentication_configuration {
-      access_role_arn = aws_iam_role.apprunner_ecr.arn
-    }
-    image_repository {
-      image_identifier      = "${aws_ecr_repository.api.repository_url}:${var.image_tag}"
-      image_repository_type = "ECR"
-      image_configuration {
-        port = "8000"
-        runtime_environment_variables = {
-          ENVIRONMENT           = var.environment == "prod" ? "production" : "staging"
-          DEBUG                 = "false"
-          SECRET_KEY            = var.django_secret_key
-          POSTGRES_DB           = "turbo_notes"
-          POSTGRES_USER         = var.db_username
-          POSTGRES_PASSWORD     = var.db_password
-          POSTGRES_HOST         = aws_db_instance.postgres.address
-          POSTGRES_PORT         = "5432"
-          ALLOWED_HOSTS         = "*"
-          COOKIE_SECURE         = "true"
-          CLOUDWATCH_ENABLED    = "true"
-          CLOUDWATCH_LOG_GROUP  = aws_cloudwatch_log_group.api.name
-          AWS_REGION            = var.aws_region
-          CORS_ALLOWED_ORIGINS  = "https://${aws_cloudfront_distribution.web.domain_name}"
-          CSRF_TRUSTED_ORIGINS  = "https://${aws_cloudfront_distribution.web.domain_name}"
-          FRONTEND_URL          = "https://${aws_cloudfront_distribution.web.domain_name}"
-        }
+resource "aws_lb_target_group" "api" {
+  name        = "${local.name}-tg"
+  port        = 8000
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip"
+  health_check {
+    path                = "/api/health/"
+    healthy_threshold   = 2
+    unhealthy_threshold = 5
+    timeout             = 5
+    interval            = 30
+    matcher             = "200"
+  }
+  tags = local.tags
+}
+
+resource "aws_lb_listener" "api" {
+  load_balancer_arn = aws_lb.api.arn
+  port              = 80
+  protocol          = "HTTP"
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+}
+
+resource "aws_ecs_cluster" "api" {
+  name = local.name
+  tags = local.tags
+}
+
+resource "aws_ecs_task_definition" "api" {
+  family                   = local.name
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+  container_definitions = jsonencode([{
+    name      = "api"
+    image     = "${aws_ecr_repository.api.repository_url}:${var.image_tag}"
+    essential = true
+    portMappings = [{
+      containerPort = 8000
+      protocol      = "tcp"
+    }]
+    environment = [
+      { name = "ENVIRONMENT", value = var.environment == "prod" ? "production" : "staging" },
+      { name = "DEBUG", value = "false" },
+      { name = "POSTGRES_DB", value = "turbo_notes" },
+      { name = "POSTGRES_USER", value = var.db_username },
+      { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
+      { name = "POSTGRES_PORT", value = "5432" },
+      { name = "ALLOWED_HOSTS", value = "*" },
+      { name = "COOKIE_SECURE", value = "true" },
+      { name = "COOKIE_SAMESITE", value = "None" },
+      { name = "CLOUDWATCH_ENABLED", value = "true" },
+      { name = "CLOUDWATCH_LOG_GROUP", value = aws_cloudwatch_log_group.api.name },
+      { name = "AWS_REGION", value = var.aws_region },
+      # Strict per-environment frontend origin only (this stack's web CF).
+      # Never "*" / localhost / the other env's URL — credentials CORS + CSRF.
+      { name = "CORS_ALLOWED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
+      { name = "CSRF_TRUSTED_ORIGINS", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
+      { name = "FRONTEND_URL", value = "https://${aws_cloudfront_distribution.web.domain_name}" },
+    ]
+    # SECRET_KEY / POSTGRES_PASSWORD resolved from Secrets Manager at task
+    # startup, never rendered into the task definition in plaintext.
+    secrets = [
+      { name = "SECRET_KEY", valueFrom = aws_secretsmanager_secret.django_secret_key.arn },
+      { name = "POSTGRES_PASSWORD", valueFrom = aws_secretsmanager_secret.db_password.arn },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.api.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "api"
       }
     }
-    auto_deployments_enabled = false
-  }
-  instance_configuration {
-    cpu               = "256"
-    memory            = "512"
-    instance_role_arn = aws_iam_role.apprunner_instance.arn
-  }
+  }])
+  tags = local.tags
+}
+
+resource "aws_ecs_service" "api" {
+  name            = local.name
+  cluster         = aws_ecs_cluster.api.id
+  task_definition = aws_ecs_task_definition.api.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
   network_configuration {
-    egress_configuration {
-      egress_type       = "VPC"
-      vpc_connector_arn = aws_apprunner_vpc_connector.connector.arn
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api.arn
+    container_name   = "api"
+    container_port   = 8000
+  }
+  depends_on = [aws_lb_listener.api]
+  tags       = local.tags
+}
+
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer" {
+  name = "Managed-AllViewer"
+}
+
+resource "aws_cloudfront_distribution" "api" {
+  enabled = true
+  origin {
+    domain_name = aws_lb.api.dns_name
+    origin_id   = "alb-api"
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
-  health_check_configuration {
-    protocol            = "HTTP"
-    path                = "/api/health/"
-    interval            = 10
-    timeout             = 5
-    healthy_threshold   = 1
-    unhealthy_threshold = 5
+  default_cache_behavior {
+    allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods           = ["GET", "HEAD", "OPTIONS"]
+    target_origin_id         = "alb-api"
+    viewer_protocol_policy   = "redirect-to-https"
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
+  }
+  restrictions {
+    geo_restriction { restriction_type = "none" }
+  }
+  viewer_certificate {
+    cloudfront_default_certificate = true
   }
   tags = local.tags
 }
@@ -345,6 +563,25 @@ resource "aws_cloudfront_origin_access_control" "web" {
   signing_protocol                  = "sigv4"
 }
 
+# S3+OAC has no directory index; rewrite /login/ → /login/index.html for Next `output: "export"`.
+resource "aws_cloudfront_function" "web_spa_rewrite" {
+  name    = "${local.name}-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = <<-EOF
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri.endsWith('/')) {
+        request.uri = uri + 'index.html';
+      } else if (!uri.includes('.')) {
+        request.uri = uri + '/index.html';
+      }
+      return request;
+    }
+  EOF
+}
+
 resource "aws_cloudfront_distribution" "web" {
   enabled             = true
   default_root_object = "index.html"
@@ -362,6 +599,10 @@ resource "aws_cloudfront_distribution" "web" {
       query_string = false
       cookies { forward = "none" }
     }
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.web_spa_rewrite.arn
+    }
   }
   restrictions {
     geo_restriction { restriction_type = "none" }
@@ -371,6 +612,12 @@ resource "aws_cloudfront_distribution" "web" {
   }
   custom_error_response {
     error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+  # OAC missing-object responses are 403, not 404.
+  custom_error_response {
+    error_code         = 403
     response_code      = 200
     response_page_path = "/index.html"
   }
@@ -402,20 +649,32 @@ resource "aws_cloudwatch_metric_alarm" "api_5xx" {
   alarm_name          = "${local.name}-5xx"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
-  metric_name         = "4xxStatusResponses"
-  namespace           = "AWS/AppRunner"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
   period              = 300
   statistic           = "Sum"
   threshold           = 50
   treat_missing_data  = "notBreaching"
   dimensions = {
-    ServiceName = aws_apprunner_service.api.service_name
+    LoadBalancer = aws_lb.api.arn_suffix
   }
   tags = local.tags
 }
 
 output "api_url" {
-  value = "https://${aws_apprunner_service.api.service_url}"
+  value = "https://${aws_cloudfront_distribution.api.domain_name}"
+}
+
+output "ecs_cluster_name" {
+  value = aws_ecs_cluster.api.name
+}
+
+output "ecs_service_name" {
+  value = aws_ecs_service.api.name
+}
+
+output "alb_dns_name" {
+  value = aws_lb.api.dns_name
 }
 
 output "web_url" {
@@ -440,6 +699,14 @@ output "rds_endpoint" {
 
 output "bastion_host" {
   value = aws_instance.bastion.public_ip
+}
+
+output "bastion_instance_id" {
+  value = aws_instance.bastion.id
+}
+
+output "bastion_key_name" {
+  value = aws_key_pair.bastion.key_name
 }
 
 output "log_group" {

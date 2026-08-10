@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -114,6 +115,8 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+# Never allow credentials + wildcard; django-cors-headers also rejects this combo.
+CORS_ALLOW_ALL_ORIGINS = False
 
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
@@ -121,11 +124,41 @@ CSRF_TRUSTED_ORIGINS = [
     if o.strip()
 ]
 
+
+def _assert_deployed_origin_allowlist(env: str, label: str, origins: list[str]) -> None:
+    """Staging/prod must allow only that environment's frontend origin(s).
+
+    No wildcards, no localhost, and the list must be non-empty. Local/docker
+    keep localhost via env defaults; Terraform sets each ECS task def to its
+    own CloudFront web URL only.
+    """
+    if env not in ("staging", "production"):
+        return
+    if not origins:
+        raise ValueError(f"{label} must be set in {env} (frontend origin allowlist)")
+    for origin in origins:
+        lowered = origin.lower()
+        if origin == "*" or "://" + "*" in origin or lowered.endswith("://*"):
+            raise ValueError(f"{label} must not use wildcards in {env}: {origin!r}")
+        if "localhost" in lowered or "127.0.0.1" in lowered:
+            raise ValueError(f"{label} must not include localhost in {env}: {origin!r}")
+
+
+_assert_deployed_origin_allowlist(ENVIRONMENT, "CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS)
+_assert_deployed_origin_allowlist(ENVIRONMENT, "CSRF_TRUSTED_ORIGINS", CSRF_TRUSTED_ORIGINS)
+
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "Lax")
 COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN") or None
 ACCESS_COOKIE_NAME = "access_token"
 REFRESH_COOKIE_NAME = "refresh_token"
+
+# Staging SPA and API sit on different CloudFront domains, so JWT cookies use
+# SameSite=None. Django's CSRF/session cookies default to Lax, which browsers
+# will not send on cross-site POSTs — CSRF then fails even when the SPA sends
+# X-CSRFToken. Keep all three aligned with COOKIE_SAMESITE.
+CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
+SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE
 
 ACCESS_TOKEN_LIFETIME_MINUTES = int(os.getenv("ACCESS_TOKEN_LIFETIME_MINUTES", "15"))
 REFRESH_TOKEN_LIFETIME_DAYS = int(os.getenv("REFRESH_TOKEN_LIFETIME_DAYS", "7"))
@@ -173,9 +206,9 @@ AXES_RESET_ON_SUCCESS = True
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 CLOUDWATCH_ENABLED = os.getenv("CLOUDWATCH_ENABLED", "false").lower() in ("1", "true", "yes")
 CLOUDWATCH_LOG_GROUP = os.getenv("CLOUDWATCH_LOG_GROUP", "")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
 
-LOGGING = {
+LOGGING: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
@@ -200,10 +233,12 @@ LOGGING = {
 }
 
 if CLOUDWATCH_ENABLED and CLOUDWATCH_LOG_GROUP:
+    # Log group is provisioned by Terraform; task role has stream put/create only.
     LOGGING["handlers"]["cloudwatch"] = {
         "class": "watchtower.CloudWatchLogHandler",
-        "log_group": CLOUDWATCH_LOG_GROUP,
-        "stream_name": ENVIRONMENT,
+        "log_group_name": CLOUDWATCH_LOG_GROUP,
+        "log_stream_name": ENVIRONMENT,
+        "create_log_group": False,
         "formatter": "json",
     }
     LOGGING["root"]["handlers"].append("cloudwatch")
@@ -214,10 +249,22 @@ X_FRAME_OPTIONS = "DENY"
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = False
 
-if ENVIRONMENT == "production":
-    SECURE_SSL_REDIRECT = True
+# Staging is real internet-facing HTTPS traffic (via CloudFront) too, not
+# just prod — the session/CSRF cookies (and HSTS) should be locked down there
+# as well, not only when ENVIRONMENT == "production".
+#
+# SECURE_SSL_REDIRECT is intentionally NOT extended to staging here: CloudFront
+# talks plain HTTP to the ALB origin (no SECURE_PROXY_SSL_HEADER is configured
+# for that hop), so request.is_secure() is always False and turning this on
+# would redirect (301) the ALB health check itself, marking the service
+# unhealthy. See docs/process security audit for the recommended follow-up
+# (configure SECURE_PROXY_SSL_HEADER from a trusted CloudFront-set header).
+if ENVIRONMENT in ("staging", "production"):
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+
+if ENVIRONMENT == "production":
+    SECURE_SSL_REDIRECT = True

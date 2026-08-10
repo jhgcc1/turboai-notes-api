@@ -36,7 +36,7 @@ class RequestLoggingMiddleware(MiddlewareMixin):
         request_id = getattr(request, "request_id", "-")
         duration_ms = 0.0
         if hasattr(request, "_start_time"):
-            duration_ms = (time.monotonic() - request._start_time) * 1000  # type: ignore[attr-defined]
+            duration_ms = (time.monotonic() - request._start_time) * 1000
         response["X-Request-ID"] = request_id
         logging.getLogger("apps.request").info(
             "%s %s -> %s",
