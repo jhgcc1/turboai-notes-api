@@ -15,7 +15,7 @@ Always ask the user: **staging or prod?**
 
 The bastion security group allows **SSH :22 only from `var.bastion_ssh_cidr`** (not `0.0.0.0/0`).
 
-- Current allowlist (staging/prod tfvars): **`187.123.69.5/32`** — WSL egress IP from this operator environment (`curl https://checkip.amazonaws.com`), discovered 2026-08-09. That is the host where the Cursor AWS MCP SSH tunnel runs.
+- Current allowlist (env `main.tf` defaults + `terraform.tfvars.example`): **`187.123.69.5/32`** — WSL egress IP from this operator environment (`curl https://checkip.amazonaws.com`), discovered 2026-08-09. That is the host where the Cursor AWS MCP SSH tunnel runs.
 - If the tunnel/`ssh` starts failing after a network or ISP change, discover the new public IP, then update `bastion_ssh_cidr` in both env `main.tf` defaults (Deploy CI reads those; `*.tfvars` is gitignored) and optionally local `terraform.tfvars` from `terraform.tfvars.example`. Apply via Deploy on `develop` (staging) or a published Release (prod). Do **not** reopen `0.0.0.0/0`.
 - SSM Session Manager on the bastion remains available as a fallback that does not depend on the SSH CIDR allowlist.
 
