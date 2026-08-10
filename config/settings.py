@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "axes",
     "apps.accounts",
     "apps.notes",
+    "apps.observability",
 ]
 
 MIDDLEWARE = [
@@ -176,6 +177,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.authentication.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "config.exception_handler.turbo_exception_handler",
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -184,6 +186,9 @@ REST_FRAMEWORK = {
         "anon": "50/hour",
         "user": "1000/hour",
         "auth": "20/minute",
+        # Browser error reports: tight anon budget, looser for signed-in users.
+        "client_error": "30/hour",
+        "client_error_user": "120/hour",
     },
 }
 
@@ -204,6 +209,13 @@ AXES_COOLOFF_TIME = 1  # hours
 AXES_RESET_ON_SUCCESS = True
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "turboai-notes-api")
+
+# On ECS the awslogs driver already ships stdout to the same log group, so
+# leaving watchtower on duplicates every line (double ingest cost, double
+# counting on the ERROR metric filter that triggers triage). Keep this off
+# wherever the container runtime forwards logs; turn it on only for runtimes
+# that do not, such as a plain EC2/bastion process.
 CLOUDWATCH_ENABLED = os.getenv("CLOUDWATCH_ENABLED", "false").lower() in ("1", "true", "yes")
 CLOUDWATCH_LOG_GROUP = os.getenv("CLOUDWATCH_LOG_GROUP", "")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-2")

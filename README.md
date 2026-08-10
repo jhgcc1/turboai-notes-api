@@ -45,6 +45,12 @@ mypy apps config
 
 Register/login set `access_token` + `refresh_token` httpOnly cookies. All note/category queries are scoped to the authenticated user.
 
+## Observability
+
+JSON logs, CloudWatch alarms, and a Lambda that debugs errors against the
+source code and emails a report with a proposed fix. See
+[`docs/architecture/observability.md`](docs/architecture/observability.md).
+
 ## AWS MCP
 
 See [`mcp/README.md`](mcp/README.md) for staging/prod CloudWatch + Postgres tools (prod is read-only).

@@ -184,19 +184,19 @@ resource "aws_db_subnet_group" "db" {
 }
 
 resource "aws_db_instance" "postgres" {
-  identifier                 = "${local.name}-pg"
-  engine                     = "postgres"
-  engine_version             = "16"
-  instance_class             = "db.t4g.micro"
-  allocated_storage          = 20
-  max_allocated_storage      = 50
-  db_name                    = "turbo_notes"
-  username                   = var.db_username
-  password                   = var.db_password
-  db_subnet_group_name       = aws_db_subnet_group.db.name
-  vpc_security_group_ids     = [aws_security_group.db.id]
-  publicly_accessible        = false
-  skip_final_snapshot        = var.environment != "prod"
+  identifier             = "${local.name}-pg"
+  engine                 = "postgres"
+  engine_version         = "16"
+  instance_class         = "db.t4g.micro"
+  allocated_storage      = 20
+  max_allocated_storage  = 50
+  db_name                = "turbo_notes"
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.db.name
+  vpc_security_group_ids = [aws_security_group.db.id]
+  publicly_accessible    = false
+  skip_final_snapshot    = var.environment != "prod"
   # Free-tier accounts reject backup_retention_period > 1 (FreeTierRestrictionError).
   # Keep 1 day for both envs; raise only after upgrading off free tier.
   backup_retention_period    = 1
@@ -324,8 +324,10 @@ resource "aws_ecr_repository" "api" {
 }
 
 resource "aws_cloudwatch_log_group" "api" {
-  name              = "/turboai/notes/${var.environment}/api"
-  retention_in_days = var.environment == "prod" ? 14 : 7
+  name = "/turboai/notes/${var.environment}/api"
+  # 30 days in prod so a slow-burning regression is still visible when someone
+  # goes looking a few weeks later; staging only needs a short window.
+  retention_in_days = var.environment == "prod" ? 30 : 7
   tags              = local.tags
 }
 
@@ -460,8 +462,12 @@ resource "aws_ecs_task_definition" "api" {
       { name = "ALLOWED_HOSTS", value = "*" },
       { name = "COOKIE_SECURE", value = "true" },
       { name = "COOKIE_SAMESITE", value = "None" },
-      { name = "CLOUDWATCH_ENABLED", value = "true" },
+      # The awslogs driver below already ships stdout to this log group, so
+      # watchtower would duplicate every line: double ingest cost and double
+      # counting on the ERROR metric filter that drives triage.
+      { name = "CLOUDWATCH_ENABLED", value = "false" },
       { name = "CLOUDWATCH_LOG_GROUP", value = aws_cloudwatch_log_group.api.name },
+      { name = "SERVICE_NAME", value = "turboai-notes-api" },
       { name = "AWS_REGION", value = var.aws_region },
       # Strict per-environment frontend origin only (this stack's web CF).
       # Never "*" / localhost / the other env's URL — credentials CORS + CSRF.
@@ -647,21 +653,8 @@ resource "aws_s3_bucket_policy" "web" {
   policy = data.aws_iam_policy_document.web_oac.json
 }
 
-resource "aws_cloudwatch_metric_alarm" "api_5xx" {
-  alarm_name          = "${local.name}-5xx"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "HTTPCode_Target_5XX_Count"
-  namespace           = "AWS/ApplicationELB"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 50
-  treat_missing_data  = "notBreaching"
-  dimensions = {
-    LoadBalancer = aws_lb.api.arn_suffix
-  }
-  tags = local.tags
-}
+# The 5xx alarm now lives in modules/observability, alongside the rest of the
+# alarms and the SNS topic that routes them to the triage Lambda.
 
 output "api_url" {
   value = "https://${aws_cloudfront_distribution.api.domain_name}"
@@ -713,4 +706,20 @@ output "bastion_key_name" {
 
 output "log_group" {
   value = aws_cloudwatch_log_group.api.name
+}
+
+output "log_group_arn" {
+  value = aws_cloudwatch_log_group.api.arn
+}
+
+output "alb_arn_suffix" {
+  value = aws_lb.api.arn_suffix
+}
+
+output "target_group_arn_suffix" {
+  value = aws_lb_target_group.api.arn_suffix
+}
+
+output "rds_instance_id" {
+  value = aws_db_instance.postgres.identifier
 }
