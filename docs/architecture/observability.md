@@ -39,6 +39,31 @@ ECS Fargate task (Django + gunicorn)
                                 (or SES when configured)
 ```
 
+### Lambda pipeline — where each thing happens
+
+Inside `handler.process_alarm`, every step is a single function in
+`observability/triage/` and runs in this order. Steps 2–4 are wrapped in
+`record_event(...)` so a failure in one fingerprint does not abort the rest.
+
+| Step | Module | What it does |
+| --- | --- | --- |
+| L1. Sample logs | `triage/logs.py` | Logs Insights query, restricted to ERROR lines for the failing alarm. |
+| L2. Pick fingerprint | `triage/logs.py` + `config/fingerprint.py` | Group by fingerprint, choose the loudest occurrence. |
+| L3. Decide notification | `triage/dedup.py` | Atomic `UpdateItem` with `ALL_OLD` returns whether this is a new fingerprint or the Nth recurrence. |
+| L4. Bundle source | `triage/repo.py` | Resolve traceback frames into ±40-line numbered windows from the bundled `repo/apps/` and `repo/config/`, capped by `CODE_CONTEXT_CHARS`. |
+| L5. Analyse | `triage/llm.py` | Calls MiniMax with the failing request + traceback + bundled code; returns `{severity, summary, root_cause, suspected_files, suggested_fix, labels, repro_hint, diff?}`. |
+| L6. Build report | `triage/notify.py` | Render the plain-text report. |
+| **J3. Create issue** | `triage/jira.py` | When `JIRA_ENABLED=true`: `POST /rest/api/3/issue` with the analysis summary, ADF description, severity prefix, and labels. Returns the issue key, or `None` if disabled or Jira fails. Errors are logged and swallowed — never block the e-mail. |
+| **D4. Attach issue** | `triage/dedup.py` | Persist the returned key on the DynamoDB item so future occurrences of the same fingerprint comment on the existing ticket instead of opening a new one. |
+| **N4. Send e-mail** | `triage/notify.py` | Publish to `<name>-triage-reports` (or send via SES). Subject prefixes `[KEY]` when Jira returned a key, body gains a `Jira: <browse-url>` line, or an `Existing ticket: <key>` line when dedup found one. SNS delivers to the address from `TF_VAR_ops_email`. |
+
+Jira and the e-mail are independent by design: a Jira outage still leaves
+you with an inbox report, and a mail outage still leaves the ticket open.
+The same analysis object feeds both, so what arrives in the e-mail matches
+what lands in the ticket — same severity, same summary, same labels, same
+suggested fix.
+```
+
 ### Two topics, on purpose
 
 Alarms fan in to `<name>-alarms`, and the Lambda publishes its report to
