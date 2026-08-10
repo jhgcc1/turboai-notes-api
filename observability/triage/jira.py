@@ -326,4 +326,3 @@ def resolve_base_url(settings: Settings) -> str:
     except (ConfigError, JiraError):
         return ""
     return base_url
-
