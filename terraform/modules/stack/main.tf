@@ -197,7 +197,9 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids     = [aws_security_group.db.id]
   publicly_accessible        = false
   skip_final_snapshot        = var.environment != "prod"
-  backup_retention_period    = var.environment == "prod" ? 7 : 1
+  # Free-tier accounts reject backup_retention_period > 1 (FreeTierRestrictionError).
+  # Keep 1 day for both envs; raise only after upgrading off free tier.
+  backup_retention_period    = 1
   deletion_protection        = var.environment == "prod"
   auto_minor_version_upgrade = true
   tags                       = local.tags
