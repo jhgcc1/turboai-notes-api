@@ -89,7 +89,9 @@ forward stdout, such as a plain EC2 process.
 deepest non-vendor traceback frame into a 16-character key. Identifiers in the
 path are collapsed (`/api/notes/42/` and `/api/notes/43/` share a route), and
 the exception *message* is excluded because it usually embeds ids or emails
-that differ between occurrences of the same bug.
+that differ between occurrences of the same bug. When no exception is raised
+(as on the 4xx path through the DRF handler), the fingerprint falls back to
+`(route, status_code)` so equivalent client errors still coalesce.
 
 State lives in DynamoDB (`<name>-error-fingerprints`), keyed by fingerprint,
 with a TTL attribute. A single `UpdateItem` with `ALL_OLD` both counts the
@@ -201,9 +203,19 @@ the LLM call, while writing the report to its own logs instead of emailing it.
 
 ### Tuning
 
-All knobs are Lambda environment variables, surfaced as module variables:
-`LOOKBACK_MINUTES`, `MAX_EVENTS`, `RESEND_EVERY`, `DEDUP_TTL_HOURS`,
-`CODE_CONTEXT_CHARS`, `CODE_WINDOW_LINES`, `LLM_MODEL`, `DRY_RUN`.
+All knobs are Lambda environment variables, surfaced as module variables so
+operators can adjust them per environment without touching code:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `LOOKBACK_MINUTES` | 15 | How far back the Lambda samples ERROR logs when an alarm fires. |
+| `MAX_EVENTS` | 25 | Maximum ERROR lines fed to the LLM per invocation. |
+| `RESEND_EVERY` | 10 | After the first report, re-notify every N occurrences of a fingerprint. |
+| `DEDUP_TTL_HOURS` | 72 | How long a fingerprint stays suppressed before counting as new again. |
+| `CODE_WINDOW_LINES` | 40 | Lines of context fetched above and below each traceback frame. |
+| `CODE_CONTEXT_CHARS` | 24000 | Hard cap on the total size of source code shipped to the LLM. |
+| `LLM_MODEL` | `MiniMax-M2.1` | Model id used for analysis. |
+| `DRY_RUN` | `false` | When `true`, run the full pipeline but write the report to logs instead of sending email. |
 
 ### Cost
 

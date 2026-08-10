@@ -112,6 +112,24 @@ variable "dedup_ttl_hours" {
   default     = 72
 }
 
+variable "max_events" {
+  type        = number
+  description = "Maximum number of ERROR log lines fed to the LLM per triage invocation."
+  default     = 25
+}
+
+variable "code_window_lines" {
+  type        = number
+  description = "Lines of context fetched above and below each traceback frame."
+  default     = 40
+}
+
+variable "code_context_chars" {
+  type        = number
+  description = "Hard cap on the total size of source code shipped to the LLM."
+  default     = 24000
+}
+
 variable "triage_dry_run" {
   type        = bool
   description = "When true the Lambda analyses errors but sends no email."

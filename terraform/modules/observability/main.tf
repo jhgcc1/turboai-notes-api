@@ -384,19 +384,22 @@ resource "aws_lambda_function" "triage" {
 
   environment {
     variables = {
-      CW_LOG_GROUP     = var.log_group_name
-      ENVIRONMENT      = var.environment
-      DEDUP_TABLE      = aws_dynamodb_table.dedup.name
-      LLM_SECRET_ID    = aws_secretsmanager_secret.llm.arn
-      LLM_BASE_URL     = var.llm_base_url
-      LLM_MODEL        = var.llm_model
-      SNS_TOPIC_ARN    = aws_sns_topic.reports.arn
-      SES_FROM         = var.ses_from
-      SES_TO           = var.ses_to
-      LOOKBACK_MINUTES = tostring(var.lookback_minutes)
-      RESEND_EVERY     = tostring(var.resend_every)
-      DEDUP_TTL_HOURS  = tostring(var.dedup_ttl_hours)
-      DRY_RUN          = tostring(var.triage_dry_run)
+      CW_LOG_GROUP       = var.log_group_name
+      ENVIRONMENT        = var.environment
+      DEDUP_TABLE        = aws_dynamodb_table.dedup.name
+      LLM_SECRET_ID      = aws_secretsmanager_secret.llm.arn
+      LLM_BASE_URL       = var.llm_base_url
+      LLM_MODEL          = var.llm_model
+      SNS_TOPIC_ARN      = aws_sns_topic.reports.arn
+      SES_FROM           = var.ses_from
+      SES_TO             = var.ses_to
+      LOOKBACK_MINUTES   = tostring(var.lookback_minutes)
+      RESEND_EVERY       = tostring(var.resend_every)
+      DEDUP_TTL_HOURS    = tostring(var.dedup_ttl_hours)
+      MAX_EVENTS         = tostring(var.max_events)
+      CODE_WINDOW_LINES  = tostring(var.code_window_lines)
+      CODE_CONTEXT_CHARS = tostring(var.code_context_chars)
+      DRY_RUN            = tostring(var.triage_dry_run)
     }
   }
 
