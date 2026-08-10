@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any
@@ -11,17 +12,73 @@ from typing import Any
 from django.http import HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
 
+from config.fingerprint import normalize_path
+
+ERROR_MARKER = "[ERROR]"
+
+# Attributes ``logging`` puts on every record. Anything outside this set came
+# from an ``extra={...}`` at the call site and belongs in the JSON payload.
+_RESERVED_RECORD_ATTRS = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
+
 
 class JsonFormatter(logging.Formatter):
+    """One JSON object per line, shaped for CloudWatch Logs metric filters.
+
+    ``service``/``environment`` are read from the process environment rather
+    than ``django.conf.settings``: ``LOGGING`` is applied while settings are
+    still being imported, so the formatter must not depend on Django being
+    ready.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.service = os.getenv("SERVICE_NAME", "turboai-notes-api")
+        self.environment = os.getenv("ENVIRONMENT", "local")
+
     def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        # Alarms filter on `$.level`, but the marker keeps errors greppable in
+        # plain-text views (ECS console, `docker logs`, `logs_tail`).
+        if record.levelno >= logging.ERROR and ERROR_MARKER not in message:
+            message = f"{ERROR_MARKER} {message}"
+
         payload: dict[str, Any] = {
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": message,
             "time": self.formatTime(record, self.datefmt),
+            "service": self.service,
+            "environment": self.environment,
         }
-        if hasattr(record, "request_id"):
-            payload["request_id"] = record.request_id
+        for key, value in record.__dict__.items():
+            if key not in _RESERVED_RECORD_ATTRS and not key.startswith("_"):
+                payload[key] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
@@ -38,6 +95,7 @@ class RequestLoggingMiddleware(MiddlewareMixin):
         if hasattr(request, "_start_time"):
             duration_ms = (time.monotonic() - request._start_time) * 1000
         response["X-Request-ID"] = request_id
+        user_id = getattr(getattr(request, "user", None), "id", None)
         logging.getLogger("apps.request").info(
             "%s %s -> %s",
             request.method,
@@ -47,6 +105,10 @@ class RequestLoggingMiddleware(MiddlewareMixin):
                 "request_id": request_id,
                 "duration_ms": round(duration_ms, 2),
                 "status": response.status_code,
+                "method": request.method,
+                "path": request.path,
+                "route": normalize_path(request.path),
+                "user_id": user_id,
             },
         )
         if response.status_code >= 500:
@@ -54,6 +116,13 @@ class RequestLoggingMiddleware(MiddlewareMixin):
                 "server_error path=%s status=%s",
                 request.path,
                 response.status_code,
-                extra={"request_id": request_id},
+                extra={
+                    "request_id": request_id,
+                    "status": response.status_code,
+                    "method": request.method,
+                    "path": request.path,
+                    "route": normalize_path(request.path),
+                    "user_id": user_id,
+                },
             )
         return response

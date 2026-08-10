@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
@@ -25,6 +26,8 @@ from apps.accounts.serializers import LoginSerializer, RegisterSerializer, UserS
 from apps.notes.services import ensure_default_categories
 
 NoAuth: list[type[BaseAuthentication]] = []
+
+logger = logging.getLogger("apps.accounts")
 
 
 def _refresh_from_body(request: Request) -> str | None:
@@ -96,8 +99,16 @@ class LogoutView(APIView):
             try:
                 token = RefreshToken(raw)  # type: ignore[arg-type]
                 token.blacklist()
-            except (TokenError, InvalidToken, AttributeError):
-                pass
+            except (TokenError, InvalidToken, AttributeError) as exc:
+                # Logout stays idempotent — cookies are cleared either way — but
+                # a token that cannot be blacklisted is worth an auth trail.
+                logger.warning(
+                    "logout_blacklist_failed",
+                    extra={
+                        "request_id": getattr(request, "request_id", "-"),
+                        "error_type": type(exc).__name__,
+                    },
+                )
         response = Response({"detail": "Logged out"})
         return clear_auth_cookies(response)
 
@@ -120,7 +131,16 @@ class RefreshView(APIView):
             old.blacklist()
             user = get_user_model().objects.get(pk=user_id)
             new_refresh = RefreshToken.for_user(user)
-        except (TokenError, InvalidToken, get_user_model().DoesNotExist, KeyError):
+        except (TokenError, InvalidToken, get_user_model().DoesNotExist, KeyError) as exc:
+            # A spike here means expired sessions, a rotation bug, or token
+            # replay — all indistinguishable from silence before this log.
+            logger.warning(
+                "refresh_rejected",
+                extra={
+                    "request_id": getattr(request, "request_id", "-"),
+                    "error_type": type(exc).__name__,
+                },
+            )
             return Response(
                 {"detail": "Invalid refresh token"},
                 status=status.HTTP_401_UNAUTHORIZED,

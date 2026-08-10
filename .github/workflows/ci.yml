@@ -23,9 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Ruff format
-        run: ruff format --check apps config
+        run: ruff format --check apps config observability
       - name: Ruff lint
-        run: ruff check apps config
+        run: ruff check apps config observability
+      # The Lambda is excluded: it imports `triage.*` as it does inside the zip,
+      # which does not resolve from the repository root.
       - name: Mypy
         run: mypy apps config || true
       - name: Unit tests (100% coverage)
