@@ -49,6 +49,7 @@ def build_report(
     is_recurrence: bool,
     issue_key: str | None = None,
     issue_browse_url: str | None = None,
+    cloudwatch_url: str = "",
 ) -> Report:
     sample = group.representative
     prefix = "RECURRING" if is_recurrence else "NEW"
@@ -83,9 +84,15 @@ def build_report(
         f"Endpoint         : {sample.method} {sample.route} -> {sample.status}",
         f"Error type       : {sample.error_type or '(unknown)'}",
         f"Log group        : {log_group}",
+        f"Log stream       : {sample.log_stream or '(none)'}",
         f"Sample request id: {sample.request_id or '(none)'}",
         f"Analysed by      : {analysis.model or '(no model)'}",
         ticket_line,
+        (
+            f"CloudWatch       : {cloudwatch_url}"
+            if cloudwatch_url
+            else "CloudWatch       : (not available)"
+        ),
         "",
         "-" * 60,
         "ROOT CAUSE",

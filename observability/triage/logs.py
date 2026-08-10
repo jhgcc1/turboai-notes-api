@@ -35,6 +35,7 @@ class LogEvent:
     source: str = ""
     stack_hint: str = ""
     user_agent: str = ""
+    log_stream: str = ""
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> LogEvent:
@@ -57,6 +58,7 @@ class LogEvent:
             source=row.get("source", ""),
             stack_hint=row.get("stack_hint", ""),
             user_agent=row.get("user_agent", ""),
+            log_stream=row.get("@logStream", ""),
         )
 
 

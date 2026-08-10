@@ -71,6 +71,7 @@ def test_fetch_error_events_falls_back_to_stack_field() -> None:
             {"field": "stack", "value": "Error: x\n    at app.js:1"},
             {"field": "source", "value": "window.onerror"},
             {"field": "stack_hint", "value": "fe_stack_may_be_minified"},
+            {"field": "@logStream", "value": "ecs/api/abc"},
         ]
     ]
     client = FakeLogsClient(rows, ["Complete"])
@@ -78,6 +79,7 @@ def test_fetch_error_events_falls_back_to_stack_field() -> None:
     assert events[0].traceback.startswith("Error: x")
     assert events[0].source == "window.onerror"
     assert events[0].stack_hint == "fe_stack_may_be_minified"
+    assert events[0].log_stream == "ecs/api/abc"
 
 
 def test_fetch_error_events_polls_until_complete() -> None:
@@ -162,6 +164,10 @@ def _analysis(**overrides: Any) -> Analysis:
 
 def test_build_report_contains_required_sections() -> None:
     group = ErrorGroup("fp1", [_event("fp1", traceback="Traceback...")])
+    cw = (
+        "https://us-east-2.console.aws.amazon.com/cloudwatch/home"
+        "?region=us-east-2#logsV2:logs-insights"
+    )
     report = notify.build_report(
         _analysis(),
         group,
@@ -172,8 +178,18 @@ def test_build_report_contains_required_sections() -> None:
         lookback_minutes=15,
         occurrences=3,
         is_recurrence=False,
+        cloudwatch_url=cw,
     )
-    for expected in ("ROOT CAUSE", "PROPOSED FIX", "REPRODUCTION", "fp1", "staging", "alarm-1"):
+    for expected in (
+        "ROOT CAUSE",
+        "PROPOSED FIX",
+        "REPRODUCTION",
+        "fp1",
+        "staging",
+        "alarm-1",
+        "CloudWatch",
+        cw,
+    ):
         assert expected in report.body
     assert report.subject.startswith("[staging] NEW HIGH")
     assert len(report.subject) <= 100

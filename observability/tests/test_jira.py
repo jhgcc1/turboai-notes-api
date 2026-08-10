@@ -163,6 +163,8 @@ def test_create_issue_posts_expected_payload(monkeypatch: pytest.MonkeyPatch) ->
     assert "Root cause" in serialized
     assert "Suspected locations" in serialized
     assert "Fix steps" in serialized
+    assert "CloudWatch" in serialized
+    assert "console.aws.amazon.com/cloudwatch" in serialized
 
 
 def test_create_issue_returns_none_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,11 +232,21 @@ def test_adf_description_includes_browse_link() -> None:
         fingerprint="fp1",
         occurrences=3,
         jira_browse_url="https://acme.atlassian.net/browse/OPS-1",
+        cloudwatch_url=(
+            "https://us-east-2.console.aws.amazon.com/cloudwatch/home"
+            "?region=us-east-2#logsV2:logs-insights"
+        ),
+        request_id="req-1",
+        log_group="/turboai/notes/staging/api",
     )
     serialized = json.dumps(body)
     assert "https://acme.atlassian.net/browse/OPS-1" in serialized
     # ADF link is rendered as a node with the link mark, not as text.
     assert '"attrs"' in serialized and '"href"' in serialized
+    assert "CloudWatch" in serialized
+    assert "console.aws.amazon.com/cloudwatch" in serialized
+    assert "/turboai/notes/staging/api" in serialized
+    assert "req-1" in serialized
 
 
 def test_coerce_labels_dedupes_and_caps() -> None:

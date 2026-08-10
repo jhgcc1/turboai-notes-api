@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from triage.cloudwatch import url_from_log_events
 from triage.llm import Analysis
 from triage.settings import ConfigError, Settings, load_secret
 
@@ -60,6 +61,21 @@ def _plain_paragraph(text: str) -> dict[str, Any]:
     }
 
 
+def _link_paragraph(label: str, href: str) -> dict[str, Any]:
+    """ADF paragraph with a labelled hyperlink."""
+    return {
+        "type": "paragraph",
+        "content": [
+            {"type": "text", "text": f"{label}: "},
+            {
+                "type": "text",
+                "text": href,
+                "marks": [{"type": "link", "attrs": {"href": href}}],
+            },
+        ],
+    }
+
+
 def _bullet_list(items: list[str]) -> dict[str, Any] | None:
     cleaned = [item.strip() for item in items if item and item.strip()]
     if not cleaned:
@@ -84,30 +100,52 @@ def _build_adf_description(
     fingerprint: str,
     occurrences: int,
     jira_browse_url: str,
+    cloudwatch_url: str = "",
+    request_id: str = "",
+    log_group: str = "",
 ) -> dict[str, Any]:
     """Return an Atlassian Document Format (ADF) body for the issue.
 
-    The browse URL is rendered as an ADF link node so Jira renders it as
-    a clickable shortcut to the issue once it exists. It only resolves
-    to a real key after the create call, so callers pass the URL built
-    from the secret's ``base_url``; the path component is intentionally
-    omitted (filled by the caller after creation).
+    Includes a CloudWatch deep link (Logs Insights filtered by fingerprint /
+    request_id when available) so operators can jump from Jira to the failing
+    log lines. MiniMax analysis is produced only inside the triage Lambda.
     """
     content: list[dict[str, Any]] = [
         _plain_paragraph(
             f"Environment: {environment}\n"
             f"Alarm: {alarm_name}\n"
             f"Fingerprint: {fingerprint}\n"
+            f"Request id: {request_id or '(none)'}\n"
+            f"Log group: {log_group or '(none)'}\n"
             f"Occurrences: {occurrences}\n"
             f"Severity: {analysis.severity.upper()} (model confidence: {analysis.confidence})"
         ),
-        {
-            "type": "heading",
-            "attrs": {"level": 3},
-            "content": [{"type": "text", "text": "Root cause"}],
-        },
-        _plain_paragraph(analysis.root_cause or "(not provided)"),
     ]
+    if cloudwatch_url:
+        content.extend(
+            [
+                {
+                    "type": "heading",
+                    "attrs": {"level": 3},
+                    "content": [{"type": "text", "text": "CloudWatch"}],
+                },
+                _link_paragraph("Open logs", cloudwatch_url),
+                _plain_paragraph(
+                    "Logs Insights query scoped to this fingerprint/request "
+                    "(or the log group/stream when those are unavailable)."
+                ),
+            ]
+        )
+    content.extend(
+        [
+            {
+                "type": "heading",
+                "attrs": {"level": 3},
+                "content": [{"type": "text", "text": "Root cause"}],
+            },
+            _plain_paragraph(analysis.root_cause or "(not provided)"),
+        ]
+    )
     locations = _bullet_list(analysis.suspected_locations)
     if locations:
         content.append(
@@ -244,6 +282,10 @@ def create_issue(
     settings: Settings,
     analysis: Analysis,
     source_logs: list[dict[str, Any]] | None = None,
+    *,
+    alarm_name: str = "",
+    fingerprint: str = "",
+    cloudwatch_url: str = "",
 ) -> str | None:
     """Create a Jira issue for the analysis and return its key (e.g. ``"BACK-42"``).
 
@@ -266,6 +308,15 @@ def create_issue(
         logger.warning("Jira credentials unavailable: %s", exc)
         return None
 
+    sample = source_logs[0] if source_logs else {}
+    fp = fingerprint or str(sample.get("fingerprint") or "")
+    request_id = str(sample.get("request_id") or "")
+    cw_url = cloudwatch_url or url_from_log_events(
+        settings.log_group,
+        source_logs,
+        lookback_minutes=settings.lookback_minutes,
+    )
+
     issue_type = settings.jira_issue_type or "Bug"
     payload: dict[str, Any] = {
         "fields": {
@@ -275,10 +326,13 @@ def create_issue(
             "description": _build_adf_description(
                 analysis,
                 environment=settings.environment,
-                alarm_name="(see logs)",  # alarm_name is plumbed via source_logs in handler
-                fingerprint="",
+                alarm_name=alarm_name or "(see logs)",
+                fingerprint=fp,
                 occurrences=len(source_logs) if source_logs else 0,
                 jira_browse_url="",  # key not known yet
+                cloudwatch_url=cw_url,
+                request_id=request_id,
+                log_group=settings.log_group,
             ),
             "labels": _coerce_labels(getattr(analysis, "labels", []) or []),
         }

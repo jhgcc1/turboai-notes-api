@@ -53,7 +53,7 @@ Inside `handler.process_alarm`, every step is a single function in
 | L4. Bundle source | `triage/repo.py` | Resolve traceback frames into ±40-line numbered windows from the bundled `repo/apps/` and `repo/config/`, capped by `CODE_CONTEXT_CHARS`. |
 | L5. Analyse | `triage/llm.py` | Calls MiniMax with the failing request + traceback + bundled code; returns `{severity, summary, root_cause, suspected_files, suggested_fix, labels, repro_hint, diff?}`. |
 | L6. Build report | `triage/notify.py` | Render the plain-text report. |
-| **J3. Create issue** | `triage/jira.py` | When `JIRA_ENABLED=true`: `POST /rest/api/3/issue` with the analysis summary, ADF description, severity prefix, and labels. Returns the issue key, or `None` if disabled or Jira fails. Errors are logged and swallowed — never block the e-mail. |
+| **J3. Create issue** | `triage/jira.py` | When `JIRA_ENABLED=true`: `POST /rest/api/3/issue` with the analysis summary, ADF description (including a **CloudWatch** Logs Insights deep link filtered by fingerprint/request_id), severity prefix, and labels. Returns the issue key, or `None` if disabled or Jira fails. Errors are logged and swallowed — never block the e-mail. |
 | **D4. Attach issue** | `triage/dedup.py` | Persist the returned key on the DynamoDB item so future occurrences of the same fingerprint comment on the existing ticket instead of opening a new one. |
 | **N4. Send e-mail** | `triage/notify.py` | Publish to `<name>-triage-reports` (or send via SES). Subject prefixes `[KEY]` when Jira returned a key, body gains a `Jira: <browse-url>` line, or an `Existing ticket: <key>` line when dedup found one. SNS delivers to the address from `TF_VAR_ops_email`. |
 

@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from triage import dedup, jira, repo
+from triage.cloudwatch import build_cloudwatch_url
 from triage.llm import analyze
 from triage.logs import fetch_error_events, group_by_fingerprint
 from triage.notify import build_report, send_report
@@ -107,12 +108,27 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
         code_context=repo.render_context(excerpts),
     )
 
+    cloudwatch_url = build_cloudwatch_url(
+        settings.log_group,
+        log_stream=sample.log_stream,
+        fingerprint=group.fingerprint,
+        request_id=sample.request_id,
+        lookback_seconds=settings.lookback_minutes * 60,
+    )
+    # Representative first so Jira metadata (request_id / stream) is richest.
+    source_logs = [sample.__dict__] + [
+        event.__dict__ for event in group.events if event is not sample
+    ]
+
     issue_key = record.issue_key
     if issue_key is None and settings.jira_enabled:
         issue_key = jira.create_issue(
             settings,
             analysis,
-            source_logs=[event.__dict__ for event in group.events],
+            source_logs=source_logs,
+            alarm_name=alarm_name,
+            fingerprint=group.fingerprint,
+            cloudwatch_url=cloudwatch_url,
         )
         if issue_key:
             # Persist the key so the next occurrence of this fingerprint
@@ -137,6 +153,7 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
         is_recurrence=not record.is_new,
         issue_key=issue_key,
         issue_browse_url=issue_browse_url,
+        cloudwatch_url=cloudwatch_url,
     )
 
     if settings.dry_run:
