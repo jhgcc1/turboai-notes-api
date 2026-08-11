@@ -46,6 +46,8 @@ def set_auth_cookies[ResponseT: HttpResponse](
 
 
 def clear_auth_cookies[ResponseT: HttpResponse](response: ResponseT) -> ResponseT:
-    response.delete_cookie(settings.ACCESS_COOKIE_NAME, path="/")
-    response.delete_cookie(settings.REFRESH_COOKIE_NAME, path="/")
+    domain: str | None = settings.COOKIE_DOMAIN or None
+    samesite = cast(SameSite, settings.COOKIE_SAMESITE)
+    response.delete_cookie(settings.ACCESS_COOKIE_NAME, path="/", domain=domain, samesite=samesite)
+    response.delete_cookie(settings.REFRESH_COOKIE_NAME, path="/", domain=domain, samesite=samesite)
     return response

@@ -461,7 +461,8 @@ resource "aws_ecs_task_definition" "api" {
       { name = "POSTGRES_PORT", value = "5432" },
       { name = "ALLOWED_HOSTS", value = "*" },
       { name = "COOKIE_SECURE", value = "true" },
-      { name = "COOKIE_SAMESITE", value = "None" },
+      # First-party via web CF /api/* proxy — Lax works in Incognito (unlike None cross-site).
+      { name = "COOKIE_SAMESITE", value = "Lax" },
       # The awslogs driver below already ships stdout to this log group, so
       # watchtower would duplicate every line: double ingest cost and double
       # counting on the ERROR metric filter that drives triage.
@@ -521,6 +522,10 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
 
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
 resource "aws_cloudfront_distribution" "api" {
   enabled = true
   origin {
@@ -572,6 +577,7 @@ resource "aws_cloudfront_origin_access_control" "web" {
 }
 
 # S3+OAC has no directory index; rewrite /login/ → /login/index.html for Next `output: "export"`.
+# Do not rewrite /api/* — that path is proxied to the ALB (ordered_cache_behavior).
 resource "aws_cloudfront_function" "web_spa_rewrite" {
   name    = "${local.name}-spa-rewrite"
   runtime = "cloudfront-js-2.0"
@@ -580,6 +586,9 @@ resource "aws_cloudfront_function" "web_spa_rewrite" {
     function handler(event) {
       var request = event.request;
       var uri = request.uri;
+      if (uri === '/api' || uri.indexOf('/api/') === 0) {
+        return request;
+      }
       if (uri.endsWith('/')) {
         request.uri = uri + 'index.html';
       } else if (!uri.includes('.')) {
@@ -597,6 +606,27 @@ resource "aws_cloudfront_distribution" "web" {
     domain_name              = aws_s3_bucket.web.bucket_regional_domain_name
     origin_id                = "s3-web"
     origin_access_control_id = aws_cloudfront_origin_access_control.web.id
+  }
+  # Same distribution as the SPA so /api/* cookies are first-party (Incognito-safe).
+  origin {
+    domain_name = aws_lb.api.dns_name
+    origin_id   = "alb-api"
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+  ordered_cache_behavior {
+    path_pattern             = "api/*"
+    allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods           = ["GET", "HEAD", "OPTIONS"]
+    target_origin_id         = "alb-api"
+    viewer_protocol_policy   = "redirect-to-https"
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    # Host = ALB DNS (not the viewer web CF host) so the origin request matches the API CF path.
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
   }
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
@@ -618,17 +648,8 @@ resource "aws_cloudfront_distribution" "web" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
-  custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-  # OAC missing-object responses are 403, not 404.
-  custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
+  # No distribution-wide 403/404 → index.html: that would rewrite proxied API errors.
+  # SPA deep links rely on the viewer-request rewrite to …/index.html instead.
   tags = local.tags
 }
 
