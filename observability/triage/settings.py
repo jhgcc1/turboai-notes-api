@@ -2,8 +2,8 @@
 
 The LLM key lives in Secrets Manager, never in the function's environment:
 Lambda env vars are readable by anyone holding
-``lambda:GetFunctionConfiguration``. Jira credentials are resolved the
-same way — a separate secret, never an env var.
+``lambda:GetFunctionConfiguration``. Jira and GitHub credentials are
+resolved the same way — separate secrets, never env vars.
 """
 
 from __future__ import annotations
@@ -76,6 +76,9 @@ class Settings:
     jira_project_key: str
     jira_issue_type: str
     jira_secret_id: str
+    github_pr_enabled: bool
+    github_secret_id: str
+    github_base_branch: str
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -84,6 +87,8 @@ class Settings:
         jira_base_url = os.getenv("JIRA_BASE_URL", "").strip().rstrip("/")
         jira_project_key = _require_when(jira_enabled, "JIRA_PROJECT_KEY")
         jira_secret_id = _require_when(jira_enabled, "JIRA_SECRET_ID")
+        github_pr_enabled = _flag("GITHUB_PR_ENABLED")
+        github_secret_id = _require_when(github_pr_enabled, "GITHUB_SECRET_ID")
         return cls(
             log_group=_require("CW_LOG_GROUP"),
             environment=os.getenv("ENVIRONMENT", "staging"),
@@ -110,4 +115,7 @@ class Settings:
             jira_project_key=jira_project_key,
             jira_issue_type=os.getenv("JIRA_ISSUE_TYPE", "Bug").strip() or "Bug",
             jira_secret_id=jira_secret_id,
+            github_pr_enabled=github_pr_enabled,
+            github_secret_id=github_secret_id,
+            github_base_branch=os.getenv("GITHUB_BASE_BRANCH", "develop").strip() or "develop",
         )

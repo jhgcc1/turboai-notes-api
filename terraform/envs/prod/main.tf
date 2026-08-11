@@ -59,6 +59,14 @@ variable "jira_issue_type" {
   default     = "Bug"
 }
 
+# Tracking branch/PR after Jira create. Default false until a PAT secret
+# exists in prod; flip to true and put-secret-value when ready.
+variable "github_pr_enabled" {
+  type        = bool
+  description = "When true, triage Lambda opens fix/<JIRA-KEY> + draft PR on the API repo after Jira create."
+  default     = false
+}
+
 module "stack" {
   source             = "../../modules/stack"
   environment        = "prod"
@@ -86,6 +94,7 @@ module "observability" {
   jira_enabled            = var.jira_enabled
   jira_project_key        = var.jira_project_key
   jira_issue_type         = var.jira_issue_type
+  github_pr_enabled       = var.github_pr_enabled
   # Prod pages on the first sustained burst rather than waiting for a spike.
   error_alarm_threshold = 3
   alb_5xx_threshold     = 5
@@ -106,6 +115,7 @@ output "reports_topic_arn" { value = module.observability.reports_topic_arn }
 output "triage_function_name" { value = module.observability.triage_function_name }
 output "llm_secret_arn" { value = module.observability.llm_secret_arn }
 output "jira_secret_arn" { value = module.observability.jira_secret_arn }
+output "github_secret_arn" { value = module.observability.github_secret_arn }
 output "observability_dashboard" { value = module.observability.dashboard_name }
 output "ecs_cluster_name" { value = module.stack.ecs_cluster_name }
 output "ecs_service_name" { value = module.stack.ecs_service_name }

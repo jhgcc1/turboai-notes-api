@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-from triage import dedup, jira, repo
+from triage import dedup, github_pr, jira, repo
 from triage.cloudwatch import build_cloudwatch_url
 from triage.llm import analyze
 from triage.logs import fetch_error_events, group_by_fingerprint
@@ -121,6 +121,7 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
     ]
 
     issue_key = record.issue_key
+    issue_was_created = False
     if issue_key is None and settings.jira_enabled:
         issue_key = jira.create_issue(
             settings,
@@ -131,6 +132,7 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
             cloudwatch_url=cloudwatch_url,
         )
         if issue_key:
+            issue_was_created = True
             # Persist the key so the next occurrence of this fingerprint
             # becomes a "comment on existing" rather than a fresh ticket.
             dedup.attach_issue(
@@ -140,6 +142,19 @@ def process_alarm(alarm: dict[str, Any], settings: Settings) -> dict[str, Any]:
             )
     base_url = settings.jira_base_url or jira.resolve_base_url(settings)
     issue_browse_url = jira.browse_url(base_url, issue_key) if issue_key and base_url else None
+
+    # Tracking branch/PR is best-effort and only runs after a fresh Jira create.
+    # Failures must not block email (same pattern as Jira failures).
+    if issue_was_created and issue_key:
+        tracking = github_pr.open_tracking_branch(
+            settings,
+            issue_key,
+            summary=analysis.summary,
+            jira_browse_url=issue_browse_url or "",
+            cloudwatch_url=cloudwatch_url,
+        )
+        if tracking is not None:
+            jira.add_comment(settings, issue_key, github_pr.as_comment_text(tracking))
 
     report = build_report(
         analysis,

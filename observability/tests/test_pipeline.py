@@ -324,6 +324,9 @@ def _settings(**overrides: Any) -> Settings:
         "jira_project_key": "",
         "jira_issue_type": "Bug",
         "jira_secret_id": "",
+        "github_pr_enabled": False,
+        "github_secret_id": "",
+        "github_base_branch": "develop",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -414,6 +417,121 @@ def test_process_alarm_creates_jira_issue(monkeypatch: pytest.MonkeyPatch) -> No
     assert attached == [(settings.dedup_table, "fp1", "OPS-7")]
     assert "[OPS-7]" in sent["subject"]
     assert sent["issue_browse_url"] == "https://acme.atlassian.net/browse/OPS-7"
+
+
+def test_process_alarm_opens_github_tracking_after_jira(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=True, occurrences=1, issue_key=None),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+    monkeypatch.setattr(handler_module.jira, "create_issue", lambda *a, **k: "KAN-12")
+    monkeypatch.setattr(handler_module.dedup, "attach_issue", lambda *a, **k: None)
+
+    tracking_calls: list[str] = []
+    comment_calls: list[str] = []
+
+    def fake_tracking(settings: Any, issue_key: str, **kwargs: Any) -> Any:
+        tracking_calls.append(issue_key)
+        from triage.github_pr import TrackingResult
+
+        return TrackingResult(
+            issue_key=issue_key,
+            branch=f"fix/{issue_key}",
+            branch_url=f"https://github.com/jhgcc1/turboai-notes-api/tree/fix/{issue_key}",
+            pr_url="https://github.com/jhgcc1/turboai-notes-api/pull/4",
+            pr_number=4,
+            created_branch=True,
+            created_pr=True,
+        )
+
+    monkeypatch.setattr(handler_module.github_pr, "open_tracking_branch", fake_tracking)
+    monkeypatch.setattr(
+        handler_module.jira,
+        "add_comment",
+        lambda settings, key, text: comment_calls.append(text) or True,
+    )
+    monkeypatch.setattr(handler_module, "send_report", lambda *a, **k: "sns")
+
+    settings = _settings(
+        jira_enabled=True,
+        jira_base_url="https://acme.atlassian.net",
+        jira_project_key="KAN",
+        jira_secret_id="jira",
+        github_pr_enabled=True,
+        github_secret_id="gh",
+    )
+    result = handler_module.process_alarm({"AlarmName": "a"}, settings)
+    assert result["action"] == "notified"
+    assert tracking_calls == ["KAN-12"]
+    assert comment_calls and "fix/KAN-12" in comment_calls[0]
+
+
+def test_process_alarm_continues_when_github_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=True, occurrences=1, issue_key=None),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+    monkeypatch.setattr(handler_module.jira, "create_issue", lambda *a, **k: "KAN-12")
+    monkeypatch.setattr(handler_module.dedup, "attach_issue", lambda *a, **k: None)
+    monkeypatch.setattr(handler_module.github_pr, "open_tracking_branch", lambda *a, **k: None)
+    sent: dict[str, Any] = {}
+
+    def fake_send(report: notify.Report, **kwargs: Any) -> str:
+        sent["ok"] = True
+        return "sns"
+
+    monkeypatch.setattr(handler_module, "send_report", fake_send)
+    result = handler_module.process_alarm(
+        {"AlarmName": "a"},
+        _settings(
+            jira_enabled=True,
+            jira_base_url="https://acme.atlassian.net",
+            jira_project_key="KAN",
+            jira_secret_id="jira",
+            github_pr_enabled=True,
+            github_secret_id="gh",
+        ),
+    )
+    assert result["action"] == "notified"
+    assert result["issue_key"] == "KAN-12"
+    assert sent.get("ok") is True
+
+
+def test_process_alarm_skips_github_for_existing_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handler_module, "fetch_error_events", lambda *a, **k: [_event("fp1")])
+    monkeypatch.setattr(
+        handler_module.dedup,
+        "register_occurrence",
+        lambda *a, **k: dedup.DedupRecord(is_new=False, occurrences=10, issue_key="KAN-1"),
+    )
+    monkeypatch.setattr(handler_module, "load_secret", lambda _id: {"api_key": "k"})
+    monkeypatch.setattr(handler_module, "analyze", lambda *a, **k: _analysis())
+
+    def must_not_run(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("GitHub must not run when reusing an existing Jira key")
+
+    monkeypatch.setattr(handler_module.github_pr, "open_tracking_branch", must_not_run)
+    monkeypatch.setattr(handler_module, "send_report", lambda *a, **k: "sns")
+    result = handler_module.process_alarm(
+        {"AlarmName": "a"},
+        _settings(
+            jira_enabled=True,
+            jira_base_url="https://acme.atlassian.net",
+            jira_project_key="KAN",
+            jira_secret_id="jira",
+            github_pr_enabled=True,
+            github_secret_id="gh",
+        ),
+    )
+    assert result["issue_key"] == "KAN-1"
 
 
 def test_process_alarm_uses_existing_issue_key(monkeypatch: pytest.MonkeyPatch) -> None:

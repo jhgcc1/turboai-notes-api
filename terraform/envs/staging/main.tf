@@ -65,6 +65,20 @@ variable "jira_issue_type" {
   default     = "Bug"
 }
 
+# Tracking branch/PR on turboai-notes-api after Jira create. Credentials
+# (PAT with repo scope) live in Secrets Manager — see observability.md.
+variable "github_pr_enabled" {
+  type        = bool
+  description = "When true, triage Lambda opens fix/<JIRA-KEY> + draft PR on the API repo after Jira create."
+  default     = true
+}
+
+variable "github_base_branch" {
+  type        = string
+  description = "Base branch for tracking PRs."
+  default     = "develop"
+}
+
 module "stack" {
   source             = "../../modules/stack"
   environment        = "staging"
@@ -93,6 +107,8 @@ module "observability" {
   jira_project_key        = var.jira_project_key
   jira_base_url           = var.jira_base_url
   jira_issue_type         = var.jira_issue_type
+  github_pr_enabled       = var.github_pr_enabled
+  github_base_branch      = var.github_base_branch
 }
 
 output "api_url" { value = module.stack.api_url }
@@ -110,6 +126,7 @@ output "reports_topic_arn" { value = module.observability.reports_topic_arn }
 output "triage_function_name" { value = module.observability.triage_function_name }
 output "llm_secret_arn" { value = module.observability.llm_secret_arn }
 output "jira_secret_arn" { value = module.observability.jira_secret_arn }
+output "github_secret_arn" { value = module.observability.github_secret_arn }
 output "observability_dashboard" { value = module.observability.dashboard_name }
 output "ecs_cluster_name" { value = module.stack.ecs_cluster_name }
 output "ecs_service_name" { value = module.stack.ecs_service_name }

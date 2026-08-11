@@ -352,6 +352,42 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
+# GitHub credentials (tracking branch / draft PR after Jira create)
+#
+# Same out-of-band pattern as Jira/LLM: Terraform creates a REPLACE_ME
+# placeholder with ignore_changes; the operator writes a fine-scoped PAT
+# (repo scope) via put-secret-value. API repo only (turboai-notes-api).
+# ---------------------------------------------------------------------------
+
+resource "aws_secretsmanager_secret" "github" {
+  count                   = var.github_pr_enabled ? 1 : 0
+  name                    = "${local.name}-github-credentials"
+  description             = "GitHub PAT (token, owner, repo) for triage Lambda tracking branches/PRs."
+  recovery_window_in_days = 0
+  tags                    = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "github_placeholder" {
+  count     = var.github_pr_enabled ? 1 : 0
+  secret_id = aws_secretsmanager_secret.github[0].id
+  secret_string = jsonencode({
+    token = "REPLACE_ME"
+    owner = "jhgcc1"
+    repo  = "turboai-notes-api"
+  })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+locals {
+  github_secret_arn = var.github_pr_enabled ? (
+    var.github_secret_id_override != "" ? var.github_secret_id_override : aws_secretsmanager_secret.github[0].arn
+  ) : ""
+}
+
+# ---------------------------------------------------------------------------
 # Triage Lambda
 # ---------------------------------------------------------------------------
 
@@ -409,6 +445,16 @@ data "aws_iam_policy_document" "triage" {
     for_each = var.jira_enabled ? [local.jira_secret_arn] : []
     content {
       sid       = "ReadJiraSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_pr_enabled ? [local.github_secret_arn] : []
+    content {
+      sid       = "ReadGithubSecret"
       effect    = "Allow"
       actions   = ["secretsmanager:GetSecretValue"]
       resources = [statement.value]
@@ -482,6 +528,11 @@ resource "aws_lambda_function" "triage" {
         JIRA_PROJECT_KEY = var.jira_project_key
         JIRA_ISSUE_TYPE  = var.jira_issue_type
         JIRA_SECRET_ID   = local.jira_secret_arn
+      } : {},
+      var.github_pr_enabled ? {
+        GITHUB_PR_ENABLED   = tostring(var.github_pr_enabled)
+        GITHUB_SECRET_ID    = local.github_secret_arn
+        GITHUB_BASE_BRANCH  = var.github_base_branch
       } : {}
     )
   }

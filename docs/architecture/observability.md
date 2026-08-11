@@ -30,6 +30,7 @@ Browser (static Next.js export)                 ECS Fargate (Django)
              custom metric  AppErrorCount → alarm → SNS → triage Lambda
                             |
                             | MiniMax ONLY inside this Lambda → Jira KAN
+                            | (+ GitHub fix/<KEY> tracking branch/PR on api repo)
                             v
                      SNS triage-reports → email (+ Jira browse link)
 ```
@@ -55,13 +56,14 @@ Inside `handler.process_alarm`, every step is a single function in
 | L6. Build report | `triage/notify.py` | Render the plain-text report. |
 | **J3. Create issue** | `triage/jira.py` | When `JIRA_ENABLED=true`: `POST /rest/api/3/issue` with the analysis summary, ADF description (including a **CloudWatch** Logs Insights deep link filtered by fingerprint/request_id), severity prefix, and labels. Returns the issue key, or `None` if disabled or Jira fails. Errors are logged and swallowed — never block the e-mail. |
 | **D4. Attach issue** | `triage/dedup.py` | Persist the returned key on the DynamoDB item so future occurrences of the same fingerprint comment on the existing ticket instead of opening a new one. |
+| **G5. Tracking branch/PR** | `triage/github_pr.py` | After a **successful** Jira create only: open remote branch `fix/<KEY>` on **turboai-notes-api** from `develop` (empty commit `chore: open tracking branch for <KEY>`), then a **draft PR** titled `[KEY] <summary>` linking Jira + CloudWatch. No product code changes. Web repo (`turboai-notes-web`) is **out of scope**. Skipped on dry-run / Jira disabled / create failure. Existing branch/PR → reuse, do not fail. Errors swallowed — never block email/Jira. Branch/PR URLs are commented on the Jira ticket. |
 | **N4. Send e-mail** | `triage/notify.py` | Publish to `<name>-triage-reports` (or send via SES). Subject prefixes `[KEY]` when Jira returned a key; body gains a `Jira: <browse-url>` (or `Existing ticket: <key>`) line plus a `CloudWatch: <console-url>` line from `triage/cloudwatch.py`. SNS delivers to the address from `TF_VAR_ops_email`. |
 
-Jira and the e-mail are independent by design: a Jira outage still leaves
-you with an inbox report, and a mail outage still leaves the ticket open.
-The same analysis object feeds both, so what arrives in the e-mail matches
-what lands in the ticket — same severity, same summary, same labels, same
-suggested fix.
+Jira, GitHub tracking, and the e-mail are independent by design: a Jira
+outage still leaves you with an inbox report; a GitHub outage still leaves
+the ticket; a mail outage still leaves the ticket (and branch when opened).
+The same analysis object feeds Jira and email — same severity, summary,
+labels, and suggested fix.
 
 ### Two topics, on purpose
 
@@ -209,6 +211,7 @@ in the architecture HTML §6 (`#sm-only-rationale`).
 | --- | --- | --- | --- |
 | `turboai-notes-{env}-llm-credentials` | Exists; MiniMax `api_key` populated | Exists; may still be Terraform `REPLACE_ME` until `put-secret-value` | Triage Lambda only (`LLM_SECRET_ID`). JSON: `api_key`, `base_url`, `model`. SM only — not in GitHub. |
 | `turboai-notes-{env}-jira-credentials` | Exists + populated; `jira_enabled=true` (project `KAN`) | **Not created** — `jira_enabled=false` in `envs/prod` | Triage Lambda only when `JIRA_ENABLED=true`. JSON: `base_url`, `email`, `api_token`. SM only — not in GitHub. |
+| `turboai-notes-{env}-github-credentials` | Created when `github_pr_enabled=true`; populate PAT out of band | **Not created** — `github_pr_enabled=false` in `envs/prod` until secret exists | Triage Lambda only when `GITHUB_PR_ENABLED=true`. JSON: `token`, `owner`, `repo` (optional `base_branch`). PAT needs `repo` scope. SM only — never commit the token. |
 
 **Why SM-only (no GitHub → SM sync):** Terraform creates these secrets with a
 `REPLACE_ME` placeholder and `ignore_changes` on `secret_string`, so deploy
@@ -261,6 +264,24 @@ CORS/CSRF origins and similar Lambda knobs are plain env config, not secrets.
      }'
    ```
 
+4. **Populate the GitHub secret** (when `github_pr_enabled = true`). Fine-scoped
+   PAT with `repo` scope for `jhgcc1/turboai-notes-api` (api only; web out of
+   scope). Terraform creates `turboai-notes-{env}-github-credentials` with a
+   `REPLACE_ME` placeholder and `ignore_changes` — same pattern as Jira/LLM:
+
+   ```bash
+   aws secretsmanager put-secret-value \
+     --secret-id "$(terraform output -raw github_secret_arn)" \
+     --secret-string '{
+       "token": "ghp_...your PAT...",
+       "owner": "jhgcc1",
+       "repo":  "turboai-notes-api"
+     }'
+   ```
+
+   Do **not** commit the PAT. Staging defaults `github_pr_enabled=true`; prod
+   stays `false` until a secret is ready.
+
 ### Verifying it end to end
 
 Invoke the function directly; it treats a bare payload as an alarm:
@@ -293,6 +314,9 @@ operators can adjust them per environment without touching code:
 | `JIRA_BASE_URL` | (empty) | Reserved for the future — the actual base URL is read from the secret so it never sits in `lambda:GetFunctionConfiguration`. Must remain empty. |
 | `JIRA_PROJECT_KEY` | (empty) | Jira project key (e.g. `KAN`, `OPS`). Required when `JIRA_ENABLED=true`. |
 | `JIRA_ISSUE_TYPE` | `Bug` | Jira issue type created by the Lambda (`Task`, `Story`, `Incident` all work). |
+| `GITHUB_PR_ENABLED` | `false` | When `true`, after a successful Jira create open `fix/<KEY>` + draft PR on turboai-notes-api (no code changes). |
+| `GITHUB_SECRET_ID` | (empty) | Secrets Manager ARN/name for GitHub credentials. Required when `GITHUB_PR_ENABLED=true`. |
+| `GITHUB_BASE_BRANCH` | `develop` | Base branch for tracking PRs (staging workflow). |
 | `DRY_RUN` | `false` | When `true`, run the full pipeline but write the report to logs instead of sending email. |
 
 ### Cost
@@ -313,6 +337,8 @@ path:
 analyse -> cloudwatch.build_cloudwatch_url
    -> create_issue (POST /rest/api/3/issue, ADF includes CloudWatch deep link)
    -> dedup.attach_issue
+   -> github_pr.open_tracking_branch (fix/KAN-42 + draft PR on api repo)
+   -> jira.add_comment (branch / PR URLs)
    -> build_report(subject=[KAN-42] ..., body "Jira: …/browse/KAN-42"
                    + "CloudWatch: <Logs Insights console URL>")
    -> SNS / SES
@@ -381,3 +407,48 @@ never logged.
   proposed patch (as a `diff` code block). The Jira browse/`self` URL is
   known only after create returns the key, so the ticket body does not embed
   its own browse link — the email carries `Jira: https://…/browse/KAN-…`.
+
+## GitHub tracking branch / draft PR
+
+After a **successful** Jira create, the Lambda opens a tracking branch on
+**turboai-notes-api** (api repo only — `turboai-notes-web` is out of scope)
+so operators have a place for investigation and a future fix with **no
+product code changes** at open time.
+
+```
+Jira create returns KAN-12
+  -> resolve develop SHA
+  -> empty commit "chore: open tracking branch for KAN-12"
+  -> create refs/heads/fix/KAN-12
+  -> open draft PR [KAN-12] <summary> (base=develop)
+  -> comment branch/PR URLs on the Jira issue
+```
+
+If GitHub rejects an identical-tree PR, the remote branch alone is kept and
+commented on Jira. If the branch or an open PR already exists for that key,
+the Lambda reuses it and does not fail triage. Dry-run, disabled GitHub,
+disabled/failed Jira create → no GitHub calls.
+
+### Variables and credentials
+
+| Terraform variable | Lambda env var | Default | Required when `GITHUB_PR_ENABLED=true`? |
+| --- | --- | --- | --- |
+| `github_pr_enabled` | `GITHUB_PR_ENABLED` | `false` (staging env default `true`) | — |
+| `github_base_branch` | `GITHUB_BASE_BRANCH` | `develop` | no |
+| `github_secret_id_override` | `GITHUB_SECRET_ID` | (module-created secret) | optional |
+
+Secret JSON (SM only, never commit):
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform output -raw github_secret_arn)" \
+  --secret-string '{
+    "token": "ghp_...repo-scoped PAT...",
+    "owner": "jhgcc1",
+    "repo":  "turboai-notes-api"
+  }'
+```
+
+The Lambda role gets `secretsmanager:GetSecretValue` on that ARN when
+`github_pr_enabled` is true. REST calls go through `triage/httpjson.py`
+(stdlib `urllib`) — no PyGithub dependency.

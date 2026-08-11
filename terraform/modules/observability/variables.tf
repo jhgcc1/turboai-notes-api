@@ -166,6 +166,24 @@ variable "jira_secret_id_override" {
   default     = ""
 }
 
+variable "github_pr_enabled" {
+  type        = bool
+  description = "When true, after a successful Jira create the triage Lambda opens a tracking branch (and draft PR) on turboai-notes-api named fix/<JIRA-KEY>. Credentials live in a separate Secrets Manager secret populated out of band. Web repo is out of scope."
+  default     = false
+}
+
+variable "github_base_branch" {
+  type        = string
+  description = "Base branch for tracking PRs (staging workflow: develop)."
+  default     = "develop"
+}
+
+variable "github_secret_id_override" {
+  type        = string
+  description = "Optional explicit Secrets Manager secret id (name or ARN) holding GitHub credentials JSON {token, owner, repo}. When empty and github_pr_enabled, the module creates a placeholder secret."
+  default     = ""
+}
+
 variable "lambda_log_retention_days" {
   type    = number
   default = 14
