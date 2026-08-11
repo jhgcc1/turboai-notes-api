@@ -15,9 +15,9 @@ Built end-to-end in **Cursor**. The primary interactive planning/coordination se
 
 ## Demo video
 
-~5 minute walkthrough (English): [turbo-notes-demo.mp4](https://d1qdib1mcwro0s.cloudfront.net/demo/turbo-notes-demo.mp4)
+~5 minute walkthrough (English): [Turbo Notes — Hiring Challenge Demo](https://youtu.be/tWrdLb37LC4)
 
-Hosted on staging S3/CloudFront (`turboai-notes-staging-web-615737882760`); opens directly in the browser with no login.
+Unlisted on YouTube; anyone with the link can watch without signing in.
 
 ## Quick start (local)
 
