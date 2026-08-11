@@ -154,10 +154,9 @@ COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN") or None
 ACCESS_COOKIE_NAME = "access_token"
 REFRESH_COOKIE_NAME = "refresh_token"
 
-# Staging SPA and API sit on different CloudFront domains, so JWT cookies use
-# SameSite=None. Django's CSRF/session cookies default to Lax, which browsers
-# will not send on cross-site POSTs — CSRF then fails even when the SPA sends
-# X-CSRFToken. Keep all three aligned with COOKIE_SAMESITE.
+# Deployed SPA calls the API same-site via web CloudFront /api/* → ALB, so
+# COOKIE_SAMESITE=Lax (Terraform). Keep CSRF/session cookies aligned. Local
+# docker defaults to Lax as well (localhost ports are same-site).
 CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
 SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE
 

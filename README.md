@@ -53,7 +53,9 @@ CI does **not** apply migrations to staging/prod. Apply is defense-in-depth on c
 
 ## Auth
 
-Register/login set `access_token` + `refresh_token` httpOnly cookies. All note/category queries are scoped to the authenticated user.
+Register/login set `access_token` + `refresh_token` httpOnly cookies (`SameSite=Lax; Secure` in staging/prod). All note/category queries are scoped to the authenticated user.
+
+Staging/prod browsers should call the API on the **web** CloudFront host (`/api/*` → ALB) so cookies are first-party (Incognito-safe). The separate API CloudFront distribution remains for Swagger/direct access.
 
 ## Observability
 
