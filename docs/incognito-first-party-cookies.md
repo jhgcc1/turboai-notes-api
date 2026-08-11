@@ -34,6 +34,15 @@ Direct API CloudFront remains for Swagger/curl. CORS allowlist unchanged (defens
 
 Until (1) is live, frontend smoke `GET $WEB_URL/api/health/` will fail — deploy API first.
 
+## Shipped (2026-08-11)
+
+| Repo | SHA | Deploy |
+|---|---|---|
+| `turboai-notes-api` | `9d30fab` | staging Deploy green |
+| `turboai-notes-web` | `de815eb` + `96ece81` | staging Deploy green |
+
+Verified: SPA bundles use web host only; `$WEB/api/health|register|me|notes` with first-party `SameSite=Lax` cookies on `d1qdib1mcwro0s.cloudfront.net`.
+
 ## Smoke
 
 ```bash
