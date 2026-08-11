@@ -13,6 +13,12 @@ Django + Django REST Framework backend for the Turbo AI notes-taking hiring chal
 
 Built end-to-end in **Cursor**. The primary interactive planning/coordination session ran on **Grok 4.5 High Fast** (the model set at kickoff), which turned the hiring-challenge brief into the locked plan in `docs/process/00-MASTER-PLAN.md` and did the initial scaffolding. The bulk of the implementation, infra, and fix-up work — Django/DRF + notes API, Terraform for AWS (VPC/ECS/RDS/S3/CloudFront/IAM/CloudWatch), GitHub CI/CD, AWS SSO/IAM/OIDC bootstrap, staging-deploy debugging, a security audit (secrets, CORS/CSRF), Figma/e2e verification, and this documentation — was delegated to dozens of asynchronous Cursor "Multitask Mode" subagents, which inherited the session's configured model (a mix of Grok 4.5 High Fast and Claude Sonnet 5 across this multi-day session). See [`docs/process/13-ai-development-process.md`](../docs/process/13-ai-development-process.md) for the full writeup, including the verbatim original prompt and a clearly-labeled, methodology-based token/cost estimate.
 
+## Demo video
+
+~5 minute walkthrough (English): [turbo-notes-demo.mp4](https://d1qdib1mcwro0s.cloudfront.net/demo/turbo-notes-demo.mp4)
+
+Hosted on staging S3/CloudFront (`turboai-notes-staging-web-615737882760`); opens directly in the browser with no login.
+
 ## Quick start (local)
 
 ```bash
