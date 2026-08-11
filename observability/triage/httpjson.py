@@ -21,17 +21,24 @@ class HttpError(RuntimeError):
         self.url = url
 
 
-def post_json(
+def request_json(
+    method: str,
     url: str,
-    payload: dict[str, Any],
-    headers: dict[str, str],
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    data = json.dumps(payload).encode()
-    request = urllib.request.Request(url, data=data, method="POST")
-    request.add_header("Content-Type", "application/json")
-    request.add_header("Accept", "application/json")
-    for key, value in headers.items():
+    """Send a JSON HTTP request and parse a JSON object response.
+
+    ``payload`` is omitted for methods that carry no body (GET/HEAD/DELETE
+    without a body). Empty / 204 responses become ``{}``.
+    """
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(url, data=data, method=method.upper())
+    merged = {"Accept": "application/json", **(headers or {})}
+    if payload is not None:
+        merged.setdefault("Content-Type", "application/json")
+    for key, value in merged.items():
         request.add_header(key, value)
 
     try:
@@ -46,3 +53,20 @@ def post_json(
         return {}
     parsed: Any = json.loads(body)
     return parsed if isinstance(parsed, dict) else {"data": parsed}
+
+
+def get_json(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    return request_json("GET", url, headers=headers, timeout=timeout)
+
+
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    timeout: int = 30,
+) -> dict[str, Any]:
+    return request_json("POST", url, payload=payload, headers=headers, timeout=timeout)

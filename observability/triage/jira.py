@@ -369,6 +369,44 @@ def browse_url(base_url: str, issue_key: str) -> str:
     return _browser_url(base_url, issue_key)
 
 
+def add_comment(settings: Settings, issue_key: str, body_text: str) -> bool:
+    """Post a plain-text comment on an issue. Best-effort; never raises."""
+    if not settings.jira_enabled or settings.dry_run or not issue_key or not body_text.strip():
+        return False
+    try:
+        base_url, email, api_token = _resolve_credentials(settings)
+    except (ConfigError, JiraError) as exc:
+        logger.warning("Jira comment skipped (credentials): %s", exc)
+        return False
+
+    payload = {
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [_plain_paragraph(body_text.strip())],
+        }
+    }
+    url = f"{base_url}/rest/api/3/issue/{issue_key}/comment"
+    headers = {
+        "Authorization": _basic_auth_header(email, api_token),
+        "User-Agent": "turboai-notes-triage-lambda/1.0",
+    }
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="POST")
+    for key, value in headers.items():
+        request.add_header(key, value)
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+            response.read()
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        logger.warning("Jira comment on %s failed: %s", issue_key, exc)
+        return False
+    logger.info("Jira comment added on %s", issue_key)
+    return True
+
+
 def resolve_base_url(settings: Settings) -> str:
     """Return ``JIRA_BASE_URL`` or the secret's ``base_url`` (never raises)."""
     if settings.jira_base_url:

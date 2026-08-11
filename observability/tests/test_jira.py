@@ -41,6 +41,9 @@ def _settings(**overrides: Any) -> Settings:
         "jira_project_key": "OPS",
         "jira_issue_type": "Bug",
         "jira_secret_id": "secret-id",
+        "github_pr_enabled": False,
+        "github_secret_id": "",
+        "github_base_branch": "develop",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -210,6 +213,77 @@ def test_create_issue_does_not_send_when_token_missing(monkeypatch: pytest.Monke
     monkeypatch.setattr(jira, "_post_create_issue", must_not_run)
     assert jira.create_issue(_settings(), _analysis()) is None
     assert called is False
+
+
+def test_add_comment_skips_when_disabled() -> None:
+    assert jira.add_comment(_settings(jira_enabled=False), "OPS-1", "hello") is False
+
+
+def test_add_comment_skips_dry_run_and_empty() -> None:
+    assert jira.add_comment(_settings(dry_run=True), "OPS-1", "hello") is False
+    assert jira.add_comment(_settings(), "OPS-1", "  ") is False
+    assert jira.add_comment(_settings(), "", "hello") is False
+
+
+def test_add_comment_handles_credential_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        jira,
+        "load_secret",
+        lambda _id: (_ for _ in ()).throw(RuntimeError("no secret")),
+    )
+    assert jira.add_comment(_settings(), "OPS-1", "hello") is False
+
+
+def test_add_comment_handles_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        jira,
+        "load_secret",
+        lambda _id: {
+            "base_url": "https://acme.atlassian.net",
+            "email": "ops@example.com",
+            "api_token": "tok",
+        },
+    )
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise jira.urllib.error.URLError("down")
+
+    monkeypatch.setattr(jira.urllib.request, "urlopen", boom)
+    assert jira.add_comment(_settings(), "OPS-1", "hello") is False
+
+
+def test_add_comment_posts_adf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        jira,
+        "load_secret",
+        lambda _id: {
+            "base_url": "https://acme.atlassian.net",
+            "email": "ops@example.com",
+            "api_token": "tok",
+        },
+    )
+    seen: dict[str, Any] = {}
+
+    class _Resp:
+        def read(self) -> bytes:
+            return b'{"id":"1"}'
+
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(request: Any, timeout: int = 0) -> _Resp:
+        seen["url"] = request.full_url
+        seen["body"] = json.loads(request.data.decode())
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(jira.urllib.request, "urlopen", fake_urlopen)
+    assert jira.add_comment(_settings(), "OPS-9", "Branch: https://github.com/x/y") is True
+    assert seen["url"].endswith("/rest/api/3/issue/OPS-9/comment")
+    assert "Branch:" in json.dumps(seen["body"])
 
 
 def test_browse_url_builds_correct_link() -> None:

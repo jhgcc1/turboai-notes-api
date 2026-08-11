@@ -3,7 +3,9 @@
 Turns a CloudWatch alarm into a debugged incident report in an inbox: samples
 the ERROR logs behind the alarm, pulls the source code the traceback points at,
 asks MiniMax for a root cause and a patch, creates a Jira issue (KAN on
-staging), and emails the result.
+staging), opens a GitHub tracking branch/draft PR named after the ticket on
+turboai-notes-api (no code changes; web repo out of scope), and emails the
+result.
 
 **MiniMax runs only here.** The Django API and Next.js SPA never call an LLM;
 they only emit structured ERROR logs (FE via `POST /api/observability/client-error/`).
@@ -20,7 +22,9 @@ triage/dedup.py       DynamoDB fingerprint counters
 triage/repo.py        Traceback -> source code excerpts
 triage/llm.py         MiniMax chat completions + defensive JSON parsing
 triage/notify.py      Report rendering, SNS/SES delivery
-triage/httpjson.py    urllib JSON POST helper
+triage/jira.py        Optional Jira Cloud issue create + comment
+triage/github_pr.py   Optional fix/<KEY> tracking branch + draft PR (api repo)
+triage/httpjson.py    urllib JSON HTTP helper
 tests/                Unit tests (no network, no AWS)
 ```
 

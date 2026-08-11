@@ -22,6 +22,11 @@ output "jira_secret_arn" {
   value       = local.jira_secret_arn
 }
 
+output "github_secret_arn" {
+  description = "ARN of the GitHub credentials secret (empty when github_pr_enabled is false). Populate with: aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{\"token\":\"ghp_...\",\"owner\":\"jhgcc1\",\"repo\":\"turboai-notes-api\"}' (repo scope PAT; do not commit the token)."
+  value       = local.github_secret_arn
+}
+
 output "dedup_table_name" {
   value = aws_dynamodb_table.dedup.name
 }
